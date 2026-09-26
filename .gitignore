@@ -1,0 +1,17 @@
+# Local environment and generated artifacts - never commit these
+.venv/
+output/
+.tmp_batch/
+.tmp_verify/
+.tmp_smart_verify/
+.tmp_zip_verify/
+__pycache__/
+*.pyc
+*.log
+*.rar
+
+# Local editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

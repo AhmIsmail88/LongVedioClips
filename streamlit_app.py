@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import time
 import zipfile
 import tempfile
 import traceback
@@ -97,6 +98,30 @@ class TranscribeLogger(StreamlitLogger):
             self._progress_bar.progress(min(1.0, int(match.group(1)) / 100.0))
 
 
+def _find_previous_work_dir(name: str, size: int) -> Path | None:
+    """A recent temp folder that already holds this exact video file.
+
+    Antigravity / streamlit can die mid-analysis; the per-session temp
+    folder survives on disk, so adopting it lets a fresh session resume
+    (transcript / candidates / scores / rendered clips) instead of
+    starting the transcription and the LLM ranking over.
+    """
+    for candidate in sorted(
+        Path(tempfile.gettempdir()).glob("lvc_*"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ):
+        if not candidate.is_dir() or candidate.name == "lvc_smart_check":
+            continue
+        video = candidate / name
+        try:
+            if video.is_file() and video.stat().st_size == size:
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
 def save_uploaded_file(uploaded_file, cache_key_slot: str = "saved_file_key") -> Path:
     """Save the uploaded video to a temp folder that persists for the
     session, since the pipeline needs a real file path on disk (nothing
@@ -109,7 +134,17 @@ def save_uploaded_file(uploaded_file, cache_key_slot: str = "saved_file_key") ->
     cache entry instead of invalidating the first one's.
     """
     if "work_dir" not in st.session_state:
-        st.session_state.work_dir = tempfile.mkdtemp(prefix="lvc_")
+        previous = _find_previous_work_dir(
+            Path(uploaded_file.name).name, int(uploaded_file.size)
+        )
+        if previous is not None:
+            st.session_state.work_dir = str(previous)
+            st.info(
+                "لقيت مجلد جلسة سابقة لنفس الفيديو - التحليل هيكمل من "
+                "آخر نقطة محفوظة بدل ما يبدأ من الأول."
+            )
+        else:
+            st.session_state.work_dir = tempfile.mkdtemp(prefix="lvc_")
     work_dir = Path(st.session_state.work_dir)
     dest = work_dir / uploaded_file.name
 
@@ -460,7 +495,50 @@ def build_clips_zip(clips, dest_dir: Path) -> Path | None:
     return zip_path
 
 
+# Stale-folders sweep: anything older than this is assumed abandoned
+# (a closed tab / crashed session) and is removed at startup. Long
+# enough that resuming an interrupted analysis still works days later.
+_STALE_WORK_DIR_AGE_HOURS = 72.0
+
+
+# NOTE: there is intentionally NO cleanup of the session's own folder at
+# shutdown. Resume (config.resume) needs these folders to SURVIVE a
+# normal exit so a re-opened app can pick a half-finished analysis back
+# up; the age-based sweep below handles disk hygiene instead. An atexit
+# hook used to delete the folder on clean shutdown, which silently
+# destroyed every resume artifact - do not re-add it.
+
+
+def _sweep_stale_work_dirs() -> int:
+    """Delete lvc_* folders left behind by earlier (closed) sessions.
+
+    cleanup_on_exit() below can only ever run while a session is
+    alive, so closed tabs and crashed sessions used to leave their
+    uploads/analysis/clips on disk forever. The current session's
+    folder is always skipped, and recent folders are left alone.
+    """
+    current = str(st.session_state.get("work_dir") or "")
+    cutoff = time.time() - _STALE_WORK_DIR_AGE_HOURS * 3600
+    removed = 0
+    for path in Path(tempfile.gettempdir()).glob("lvc_*"):
+        if not path.is_dir() or str(path) == current:
+            continue
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+            shutil.rmtree(path, ignore_errors=True)
+            removed += 1
+        except OSError:
+            continue
+    return removed
+
+
 def main() -> None:
+    # Once per session: sweep leftovers from earlier sessions.
+    if not st.session_state.get("_stale_sweep_done"):
+        _sweep_stale_work_dirs()
+        st.session_state["_stale_sweep_done"] = True
+
     st.title("🎬 Long Video → TikTok Clips")
     st.caption(
         "يعمل بالكامل على جهازك — لا يتم رفع أي فيديو أو صوت أو نص إلى أي خادم خارجي."
@@ -490,6 +568,16 @@ def main() -> None:
         st.header("الإعدادات")
         num_clips = st.slider(
             "عدد المقاطع", min_value=1, max_value=30, value=suggested_clips, key=slider_key
+        )
+        resume_enabled = st.checkbox(
+            "استكمال من آخر نقطة (لو الواجهة أو السيرفر قفل)",
+            value=True,
+            help=(
+                "لو التحليل اتقطع في النص، إعادة رفع نفس الفيديو بنفس "
+                "الإعدادات هتكمّل من آخر مرحلة خلصت (ترجمة/مرشحات/تقييم/"
+                "كليبات مصدّرة) بدل ما تبدأ من الأول."
+            ),
+            key="resume_enabled",
         )
         split_evenly = st.checkbox(
             "قسّم الفيديو بالتساوي حسب عدد المقاطع",
@@ -677,6 +765,7 @@ def main() -> None:
             ollama_model=ollama_model,
             ollama_host=ollama_host,
             split_evenly=split_evenly,
+            resume=resume_enabled,
         )
 
         st.subheader("التحليل")
@@ -772,6 +861,7 @@ def main() -> None:
                 normalize_audio=normalize_audio,
                 fix_lighting=fix_lighting,
                 lighting_strength=float(lighting_strength),
+                resume=resume_enabled,
             )
 
             st.subheader("التصدير")

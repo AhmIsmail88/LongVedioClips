@@ -41,6 +41,13 @@ from config import (
 )
 from core import candidate_generator, clip_processor, clip_selector, quality_filter, transcriber
 from utils.ffmpeg import check_ffmpeg_installed, probe_duration
+from utils.resume import (
+    band_fingerprint,
+    reuse_if_fresh,
+    video_identity,
+    whisper_fingerprint,
+    write_meta,
+)
 from utils.logger import Logger, PipelineError
 
 
@@ -313,6 +320,34 @@ def build_config(args: argparse.Namespace, num_clips: int) -> Config:
     )
 
 
+def _load_candidates(path):
+    """Candidate list from a previous run's candidates.json."""
+    from models.schemas import CandidateSegment
+
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return [CandidateSegment.from_dict(d) for d in data]
+
+
+def _reuse_artifact(path, fingerprint, config, logger, loader, label):
+    """Load an artifact from an earlier run, or None to recompute it.
+
+    Reuse requires the sidecar metadata to match this video and these
+    settings, so a stale artifact (different file, different model, a
+    different clip band) is never silently reused.
+    """
+    if not reuse_if_fresh(path, fingerprint, config):
+        return None
+    try:
+        artifact = loader()
+    except Exception as e:  # noqa: BLE001
+        logger.warn(f"Could not reuse the saved {label} ({e}); recomputing it.")
+        return None
+    if not artifact:
+        return None
+    logger.info(f"Resume: reusing the saved {label} - skipping that stage.")
+    return artifact
+
+
 def analyze(
     config: Config, logger: Logger, stats_out: dict | None = None
 ) -> tuple[list, list, float]:
@@ -363,18 +398,35 @@ def analyze(
     effective_config = apply_band_plan(config, plan)
 
     logger.stage(2, "Extracting/transcribing audio...")
-    with logger.timed("Transcription"):
-        segments = transcriber.transcribe(
-            video_path=config.video_path,
-            model_size=config.whisper_model,
-            language=config.language,
-            device=config.device,
-            compute_type_gpu=config.compute_type_gpu,
-            compute_type_cpu=config.compute_type_cpu,
-            logger=logger,
-        )
-        transcriber.save_transcript(segments, str(config.transcript_path()))
-        logger.info(f"Transcript saved: {config.transcript_path()} ({len(segments)} segments)")
+    transcript_path = config.transcript_path()
+    segments = _reuse_artifact(
+        transcript_path,
+        whisper_fingerprint(config),
+        config,
+        logger,
+        lambda: transcriber.load_transcript(str(transcript_path)),
+        "transcript",
+    )
+    if segments is None:
+        with logger.timed("Transcription"):
+            segments = transcriber.transcribe(
+                video_path=config.video_path,
+                model_size=config.whisper_model,
+                language=config.language,
+                device=config.device,
+                compute_type_gpu=config.compute_type_gpu,
+                compute_type_cpu=config.compute_type_cpu,
+                logger=logger,
+            )
+            transcriber.save_transcript(segments, str(transcript_path))
+            write_meta(
+                transcript_path,
+                fingerprint=whisper_fingerprint(config),
+                **video_identity(config.video_path),
+            )
+            logger.info(
+                f"Transcript saved: {transcript_path} ({len(segments)} segments)"
+            )
 
     stats = stats_out if stats_out is not None else {}
     stats["max_feasible_clips"] = plan.max_feasible_clips
@@ -382,23 +434,41 @@ def analyze(
     stats["requested"] = effective_config.num_clips
 
     logger.stage(3, "Generating candidates...")
-    with logger.timed("Candidate generation"):
-        candidates = candidate_generator.generate_candidates(
-            segments,
-            window_sizes=effective_config.candidate_window_sizes,
-            stride=effective_config.candidate_stride,
-            min_duration=effective_config.min_duration,
-            max_duration=effective_config.max_duration,
-            max_candidates=effective_config.max_candidates,
-        )
-        if not candidates:
-            raise PipelineError(
-                "No candidate segments could be generated from the transcript.",
-                hint="The video may be too short, or contain too little speech.",
+    candidates_path = config.candidates_path()
+    candidates = _reuse_artifact(
+        candidates_path,
+        band_fingerprint(effective_config),
+        effective_config,
+        logger,
+        lambda: _load_candidates(candidates_path),
+        "candidate list",
+    )
+    if candidates is None:
+        with logger.timed("Candidate generation"):
+            candidates = candidate_generator.generate_candidates(
+                segments,
+                window_sizes=effective_config.candidate_window_sizes,
+                stride=effective_config.candidate_stride,
+                min_duration=effective_config.min_duration,
+                max_duration=effective_config.max_duration,
+                max_candidates=effective_config.max_candidates,
             )
-        logger.info(f"Generated {len(candidates)} candidate segments")
-        with open(config.candidates_path(), "w", encoding="utf-8") as f:
-            json.dump([c.to_dict() for c in candidates], f, ensure_ascii=False, indent=2)
+            if not candidates:
+                raise PipelineError(
+                    "No candidate segments could be generated from the transcript.",
+                    hint="The video may be too short, or contain too little speech.",
+                )
+            logger.info(f"Generated {len(candidates)} candidate segments")
+            with open(candidates_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    [c.to_dict() for c in candidates], f,
+                    ensure_ascii=False, indent=2,
+                )
+            write_meta(
+                candidates_path,
+                fingerprint=band_fingerprint(effective_config),
+                **video_identity(config.video_path),
+            )
 
     logger.stage(4, "Ranking candidates with Qwen...")
     with logger.timed("LLM ranking"):

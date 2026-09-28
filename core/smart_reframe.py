@@ -15,7 +15,10 @@ video. Original project MIT-licensed; attribution preserved per license
 terms.
 
 This path is opt-in (`config.use_smart_reframe = True`) because it needs
-extra, heavier dependencies (opencv-python, ultralytics, scenedetect) and
+extra dependencies (opencv-python and scenedetect are required;
+ultralytics is optional - it only powers the person-detection fallback
+used when no face is visible, so face tracking still works without it)
+and it is
 is noticeably slower than the default single-pass ffmpeg center crop in
 utils/ffmpeg.render_vertical_clip, since it walks the clip frame-by-frame
 in Python instead of a single ffmpeg filter.
@@ -57,11 +60,12 @@ def _check_dependencies() -> None:
         import scenedetect  # noqa: F401
     except ImportError:
         missing.append("scenedetect")
-    try:
-        from ultralytics import YOLO  # noqa: F401
-    except ImportError:
-        missing.append("ultralytics")
 
+    # ultralytics/YOLO is deliberately NOT required: it is only a
+    # fallback for frames with no visible face, and on some machines
+    # (e.g. Windows Application Control policies blocking torch's
+    # unsigned DLLs) it cannot load at all. The feature degrades to
+    # face tracking instead of failing.
     if missing:
         raise PipelineError(
             "Smart reframe requires extra dependencies that aren't installed: "
@@ -351,7 +355,18 @@ def render_vertical_clip_smart(
 
     import cv2
     from scenedetect import FrameTimecode
-    from ultralytics import YOLO
+
+    # Optional: see _check_dependencies. A load failure (missing
+    # package, or an OS policy blocking torch's DLLs) only disables
+    # the person fallback.
+    YOLO = None
+    try:
+        from ultralytics import YOLO  # type: ignore[no-redef]
+    except Exception as exc:  # noqa: BLE001 - includes OSError from blocked DLLs
+        logger.warn(
+            f"Smart reframe: person-detection fallback unavailable ({exc}); "
+            "continuing with face tracking only."
+        )
 
     aspect_ratio = width / height
     ffmpeg_bin, _ = get_ffmpeg_binaries()
@@ -388,7 +403,15 @@ def render_vertical_clip_smart(
             crop_height = int(crop_width / aspect_ratio)
 
         face_detector = _load_face_detector()
-        yolo_model = YOLO("yolov8n.pt")
+        yolo_model = None
+        if YOLO is not None:
+            try:
+                yolo_model = YOLO("yolov8n.pt")
+            except Exception as exc:  # noqa: BLE001
+                logger.warn(
+                    f"Smart reframe: could not load YOLO weights ({exc}); "
+                    "continuing with face tracking only."
+                )
 
         logger.info("Smart reframe: classifying scenes (single speaker vs group)...")
         scene_strategies = _analyze_scene_strategies(trimmed_path, scenes, face_detector, logger)
@@ -462,7 +485,7 @@ def render_vertical_clip_smart(
                         if target_box:
                             last_face_box = target_box
                             cameraman.update_target(target_box)
-                        else:
+                        elif yolo_model is not None:
                             person_box = _detect_person_yolo(frame, yolo_model)
                             if person_box:
                                 last_face_box = person_box

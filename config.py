@@ -164,8 +164,17 @@ def plan_clip_band(
         # video. Callers that keep the requested min/max act as the
         # floor and the (generous) ceiling for that share.
         share = video_duration / num_clips
-        eff_max = min(ABSOLUTE_MAX_CLIP_SECONDS, max(floor, share))
-        eff_min = max(floor, min(eff_max, eff_max * 0.6))
+        # The even split may ask for LONGER clips (the share per clip),
+        # but never longer than the caller's own maximum: an explicit
+        # "shorts: max 60s" must not turn into 10-minute clips just
+        # because five clips could tile the whole video.
+        capped = max(floor, float(max_duration))
+        eff_max = min(ABSOLUTE_MAX_CLIP_SECONDS, max(floor, share), capped)
+        eff_min = max(floor, min(float(min_duration), eff_max))
+        if eff_max >= share:
+            # Uncapped: keep the coverage floor so N clips still
+            # spread across the video instead of clustering.
+            eff_min = max(eff_min, min(eff_max, eff_max * 0.6))
         notes.append(
             f"Even split: {num_clips} clip(s) across {video_duration:.0f}s of "
             f"video gives {share:.1f}s per clip - using a "
@@ -309,6 +318,14 @@ class Config:
     scoring_weights: ScoringWeights = field(default_factory=ScoringWeights)
     llm_timeout_seconds: int = 120
     llm_max_retries: int = 2
+
+    # Resume: reuse the transcript / candidate list / scores / already
+    # rendered clips produced by an EARLIER run of the same video with
+    # the same settings, so an interrupted analysis does not start over
+    # (transcription ~10 min and LLM ranking ~30 min are far too
+    # expensive to lose). Artifacts carry a sidecar .meta.json with the
+    # inputs they were made from; any mismatch recomputes that stage.
+    resume: bool = True
 
     # Quality filtering / selection
     num_clips: int = 5

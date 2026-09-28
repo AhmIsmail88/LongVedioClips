@@ -1,4 +1,9 @@
 -r requirements.txt
-opencv-python>=4.9.0
+# OpenCV 5.x removed the legacy Haar CascadeClassifier API this project
+# uses for face detection - stay on the 4.x line.
+opencv-python>=4.9.0,<5
 scenedetect>=0.6.0
+# Optional: only powers the person-detection fallback in smart reframe.
+# On machines where Windows app-control policies block torch's unsigned
+# DLLs it cannot load, and the feature degrades to face tracking anyway.
 ultralytics>=8.2.0

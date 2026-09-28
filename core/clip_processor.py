@@ -25,6 +25,7 @@ from config import Config
 from core import lighting
 from models.schemas import FinalClip, TranscriptSegment
 from utils.ffmpeg import burn_subtitles, nvenc_available, render_vertical_clip
+from utils.resume import read_meta, write_meta
 from utils.logger import Logger
 
 
@@ -91,6 +92,25 @@ def render_clips(
                     f"-> {clip.start:.1f}s-{clip.end:.1f}s"
                 )
 
+        # Resume: reuse a clip an earlier (interrupted) run already
+        # finished - but only when its exact span matches, so edited
+        # boundaries always render again.
+        _already = False
+        try:
+            _already = os.path.exists(output_path) and os.path.getsize(output_path) > 0
+        except OSError:
+            _already = False
+        if _already:
+            _meta = read_meta(output_path)
+            if (
+                _meta.get("start") == round(clip.start, 3)
+                and _meta.get("end") == round(clip.end, 3)
+            ):
+                logger.info(f"Resume: {filename} already rendered - skipping.")
+                clip.output_path = output_path
+                rendered.append(clip)
+                continue
+
         logger.info(
             f"Rendering {filename}: {clip.start:.1f}s-{clip.end:.1f}s "
             f"(score {clip.score:.1f})"
@@ -144,6 +164,11 @@ def render_clips(
 
             clip.output_path = output_path
             rendered.append(clip)
+            write_meta(
+                output_path,
+                start=round(clip.start, 3),
+                end=round(clip.end, 3),
+            )
         except Exception as e:
             logger.warn(f"Failed to render {filename}: {e}")
             continue

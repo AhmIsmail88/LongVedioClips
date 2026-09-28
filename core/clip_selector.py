@@ -15,6 +15,8 @@ import json
 import re
 import time
 
+from pathlib import Path
+
 from config import Config
 from models.schemas import CandidateSegment, ScoredClip
 from utils.logger import Logger, PipelineError
@@ -34,8 +36,8 @@ Score each of these from 0-100:
 
 Also provide:
 - score: overall score 0-100 (your own holistic judgment)
-- reason: one short sentence explaining the score
-- title: a short, catchy on-screen title (max ~8 words) for this clip, written \
+- reason: max 8 words explaining the score
+- title: a short, catchy on-screen title (max 6 words) for this clip, written \
 in the SAME language as the clip's text - the kind of punchy hook text you'd \
 see overlaid at the top of a viral short-form clip.
 
@@ -67,7 +69,12 @@ code fences:
 # and the batch is sized from the payload that actually gets sent.
 _MAX_CANDIDATE_CHARS = 1200
 _CANDIDATE_HEAD_CHARS = 850
-_BATCH_TARGET_CHARS = 16000
+# Slightly under the previous 16000 so the model always has room to
+# finish its JSON answer inside the context window (Arabic runs ~2.5
+# chars/token; overflow showed up as truncated batches scoring 1/13).
+_BATCH_TARGET_CHARS = 14000
+# How many times a failing batch may be halved: 13 -> 6/7 -> 3/4.
+_MAX_SPLIT_DEPTH = 2
 _BATCH_TARGET_SECONDS = 1000.0
 _MIN_BATCH_SIZE = 4
 
@@ -351,13 +358,49 @@ def _parse_entries(
     return clips
 
 
+def _save_scores(path, clips, fingerprint, config) -> None:
+    """Persist scores after every batch so an interrupted run can resume."""
+    from utils.resume import video_identity, write_meta
+
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(
+                {"clips": [c.to_dict() for c in clips]},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+        write_meta(path, fingerprint=fingerprint, **video_identity(config.video_path))
+    except OSError:
+        pass  # scoring continues even if the checkpoint cannot be written
+
+
+def _load_saved_scores(path, fingerprint, config, logger):
+    """Scores from an earlier run of this same video+settings, if any."""
+    from models.schemas import ScoredClip
+    from utils.resume import reuse_if_fresh
+
+    if not reuse_if_fresh(path, fingerprint, config):
+        return []
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        clips = [ScoredClip.from_dict(d) for d in data.get("clips", [])]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        logger.warn(f"Could not reuse the saved scores ({e}); ranking again.")
+        return []
+    return clips
+
+
 def _score_batch(
     batch: list[CandidateSegment],
     config: Config,
     logger: Logger,
     candidate_by_span: dict,
     stats: dict,
-    top_level: bool = True,
+    depth: int = 0,
 ) -> tuple[list[ScoredClip], bool]:
     """Score a single batch, retrying it, and if it still fails, splitting
     it into two halves and retrying those once (no deeper recursion - the
@@ -408,7 +451,7 @@ def _score_batch(
         except Exception as e:  # noqa: BLE001 - parse errors, timeouts
             last_error = e
 
-    if top_level and len(batch) > 1:
+    if len(batch) > 1 and depth < _MAX_SPLIT_DEPTH:
         mid = len(batch) // 2
         stats["sub_batches_attempted"] += 2
         logger.warn(
@@ -417,22 +460,23 @@ def _score_batch(
             f"{mid} and {len(batch) - mid} candidates..."
         )
         left, ok_left = _score_batch(
-            batch[:mid], config, logger, candidate_by_span, stats, top_level=False
+            batch[:mid], config, logger, candidate_by_span, stats, depth=depth + 1
         )
         right, ok_right = _score_batch(
-            batch[mid:], config, logger, candidate_by_span, stats, top_level=False
+            batch[mid:], config, logger, candidate_by_span, stats, depth=depth + 1
         )
         if not ok_left:
             stats["sub_batches_failed"] += 1
         if not ok_right:
             stats["sub_batches_failed"] += 1
-        if ok_left or ok_right:
-            stats["batches_partial"] += 1
-        else:
-            stats["batches_failed"] += 1
+        if depth == 0:
+            if ok_left or ok_right:
+                stats["batches_partial"] += 1
+            else:
+                stats["batches_failed"] += 1
         return left + right, ok_left or ok_right
 
-    if top_level:
+    if depth == 0:
         stats["batches_failed"] += 1
     logger.warn(
         f"Skipping a batch of {len(batch)} candidate(s) after {attempts} failed "
@@ -484,6 +528,27 @@ def score_candidates(
     if batch_size is None:
         batch_size = llm_batch_size_for(config, candidates)
 
+    from utils.resume import band_fingerprint
+
+    scores_path = Path(config.project_output_dir()) / "scores.json"
+    fingerprint = band_fingerprint(config)
+    reused = _load_saved_scores(scores_path, fingerprint, config, logger)
+    reused_spans = {(round(c.start, 3), round(c.end, 3)) for c in reused}
+    pending = [
+        c
+        for c in candidates
+        if (round(c.start, 3), round(c.end, 3)) not in reused_spans
+    ]
+    if reused:
+        logger.info(
+            f"Resume: {len(reused)} of {len(candidates)} candidate(s) were "
+            f"already scored; ranking the remaining {len(pending)}."
+        )
+    if reused and not pending:
+        logger.info("Resume: every candidate already scored - skipping ranking.")
+        return reused
+    candidates = pending
+
     scored: list[ScoredClip] = []
     candidate_by_span = {(c.start, c.end): c for c in candidates}
     batches_reanchored = 0
@@ -512,6 +577,8 @@ def score_candidates(
         ):
             batches_reanchored += 1
         scored.extend(batch_clips)
+        if batch_clips:
+            _save_scores(scores_path, reused + scored, fingerprint, config)
         if not produced:
             # _score_batch already counted this failed top-level batch.
             logger.info(
@@ -550,7 +617,7 @@ def score_candidates(
             f"than requested."
         )
 
-    return scored
+    return reused + scored
 
 
 def _closest_candidate(clip: ScoredClip, batch: list[CandidateSegment]) -> CandidateSegment | None:

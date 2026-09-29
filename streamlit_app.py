@@ -28,6 +28,7 @@ from config import (
     SUPPORTED_MEDIA_EXTENSIONS,
     SUPPORTED_VIDEO_EXTENSIONS,
     plan_clip_band,
+    plan_full_coverage,
     suggest_num_clips,
 )
 from app import analyze as analyze_pipeline
@@ -680,6 +681,38 @@ def main() -> None:
                 int(_preset.get("max_duration", 60)),
                 key=f"max_duration_{platform_choice}",
             )
+        cover_full = st.checkbox(
+            "تغطية المحاضرة كاملة (أجزاء متتالية بنفس الطول)",
+            value=False,
+            help=(
+                "للمحاضرات الطويلة: تقطيع المحاضرة كلها لأجزاء متتالية "
+                "بدون فلترة جودة (تغطية 100% من المدة)، بدل اختيار أفضل "
+                "اللحظات."
+            ),
+            key="cover_full",
+        )
+        if cover_full:
+            part_length = float(
+                st.select_slider(
+                    "طول كل جزء (ثانية)",
+                    options=[30, 45, 60, 75, 90],
+                    value=60,
+                    key="part_length",
+                )
+            )
+            if video_duration_seconds:
+                _count, _cmin, _cmax = plan_full_coverage(
+                    float(video_duration_seconds), part_length
+                )
+                num_clips = _count
+                min_duration = float(_cmin)
+                max_duration = float(_cmax)
+                st.info(
+                    f"وضع التغطية الكاملة: {_count} جزء × ~{_cmax:.0f} ثانية "
+                    f"= المحاضرة كلها ✓"
+                )
+        else:
+            part_length = 60.0
         language = st.selectbox(
             "اللغة", options=["auto (تلقائي)", "ar", "en"], index=0
         )
@@ -814,6 +847,9 @@ def main() -> None:
             ollama_model=ollama_model,
             ollama_host=ollama_host,
             split_evenly=split_evenly,
+            cover_full=cover_full,
+            part_length=float(part_length),
+            min_score_threshold=(0.0 if cover_full else 40.0),
             resume=resume_enabled,
         )
 

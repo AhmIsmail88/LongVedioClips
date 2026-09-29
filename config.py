@@ -129,6 +129,27 @@ class ClipBandPlan:
         )
 
 
+def plan_full_coverage(
+    video_duration: float, part_length: float
+) -> tuple[int, float, float]:
+    """Full-coverage plan: split the WHOLE video into consecutive parts.
+
+    Returns (num_clips, min_duration, max_duration) where the count is
+    the minimum number of ~part_length-second parts that tile the video
+    (last part may be shorter), and the band is centred so every part
+    can be produced. Pair it with min_score_threshold=0: coverage is
+    the goal here, so weak moments must not be dropped as holes.
+    """
+    if video_duration <= 0 or part_length <= 0:
+        return 0, 0.0, 0.0
+    count = int(video_duration // part_length)
+    if count * part_length < video_duration - 1e-9:
+        count += 1
+    count = max(1, count)
+    share = video_duration / count
+    return count, max(5.0, share * 0.5), share
+
+
 def plan_clip_band(
     video_duration: float,
     num_clips: int,
@@ -359,6 +380,12 @@ class Config:
     # the user picks the count and nothing else. Off by default on the
     # CLI (short-form behaviour is unchanged); the GUI turns it on.
     split_evenly: bool = False
+
+    # Full-coverage mode: serialise the whole video into consecutive
+    # ~part_length-second parts (a lecture chopped into publishable
+    # parts) instead of picking the best-scoring moments.
+    cover_full: bool = False
+    part_length: float = 60.0
 
     # Video export
     output_width: int = 1080

@@ -18,7 +18,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from config import Config, plan_clip_band  # noqa: E402
+from config import Config, plan_clip_band, plan_full_coverage  # noqa: E402
 from core import clip_selector  # noqa: E402
 from core import quality_filter as qf  # noqa: E402
 from models.schemas import ScoredClip, TranscriptSegment, Word  # noqa: E402
@@ -324,6 +324,53 @@ class MicroPauseSnappingTests(unittest.TestCase):
         c = clip(4.0, 4.2, 80.0, "t")
         moved = qf.snap_to_pause_center(c, pauses, 0.1)
         self.assertFalse(moved)
+
+
+class FullCoverageTests(unittest.TestCase):
+    """plan_full_coverage tiles the whole video at the requested length."""
+
+    def test_a_51_minute_lecture_becomes_51_one_minute_parts(self):
+        count, mn, mx = plan_full_coverage(3057.0, 60.0)
+        self.assertEqual(count, 51)
+        self.assertGreaterEqual(count * mx + 1e-6, 3057.0)
+        self.assertLessEqual(mx, 60.0 + 1e-6)
+
+    def test_exactly_divisible_video_has_no_extra_part(self):
+        count, _, mx = plan_full_coverage(1800.0, 60.0)
+        self.assertEqual(count, 30)
+        self.assertAlmostEqual(mx, 60.0, places=6)
+
+    def test_short_video_becomes_a_single_part(self):
+        count, _, mx = plan_full_coverage(40.0, 60.0)
+        self.assertEqual(count, 1)
+        self.assertAlmostEqual(mx, 40.0, places=6)
+
+    def test_invalid_inputs_return_an_empty_plan(self):
+        self.assertEqual(plan_full_coverage(0.0, 60.0)[0], 0)
+        self.assertEqual(plan_full_coverage(100.0, 0.0)[0], 0)
+
+
+class CoverTimelineTests(unittest.TestCase):
+    """Cover mode tiles the timeline instead of dropping neighbouring parts."""
+
+    def test_parts_cover_almost_the_whole_timeline(self):
+        cands = [
+            clip(float(i), min(46.0, i + 12.0), 80.0, f"t{i}")
+            for i in range(0, 46, 8)
+        ]
+        kept = qf._cover_timeline(cands, 46.0, 15.0, {})
+        self.assertTrue(kept)
+        covered = sum(c.duration for c in kept)
+        self.assertGreaterEqual(covered / 46.0, 0.9)
+
+    def test_neighbouring_parts_are_both_kept(self):
+        cands = [
+            clip(0.0, 15.0, 90.0, "a"),
+            clip(15.0, 30.0, 60.0, "b"),
+            clip(30.0, 45.0, 50.0, "c"),
+        ]
+        kept = qf._cover_timeline(cands, 45.0, 15.0, {})
+        self.assertEqual(len(kept), 3)
 
 
 class QuietLogger:

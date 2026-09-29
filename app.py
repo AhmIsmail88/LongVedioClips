@@ -37,6 +37,7 @@ from config import (
     SUPPORTED_VIDEO_EXTENSIONS,
     apply_band_plan,
     plan_clip_band,
+    plan_full_coverage,
     suggest_num_clips,
 )
 from core import candidate_generator, clip_processor, clip_selector, quality_filter, transcriber
@@ -167,6 +168,22 @@ def parse_args() -> argparse.Namespace:
             "start/end times yourself before exporting."
         ),
     )
+    parser.add_argument(
+        "--cover-full",
+        action="store_true",
+        help=(
+            "Full-coverage mode: cut the WHOLE video into consecutive "
+            "parts of ~--part-length seconds (e.g. a lecture), instead "
+            "of picking only the best moments."
+        ),
+    )
+    parser.add_argument(
+        "--part-length",
+        type=float,
+        default=60.0,
+        metavar="SECONDS",
+        help="Target length of each part in --cover-full mode (default: 60).",
+    )
     return parser.parse_args()
 
 
@@ -242,6 +259,18 @@ def resolve_num_clips(args: argparse.Namespace, logger: Logger, batch: bool = Fa
     themselves. --yes skips this prompt for scripts/automation, and batch
     mode skips it too (a folder must run unattended).
     """
+    if getattr(args, "cover_full", False):
+        check_ffmpeg_installed()
+        video_duration = probe_duration(args.video)
+        count, _min, _max = plan_full_coverage(
+            video_duration, float(getattr(args, "part_length", 60.0) or 60.0)
+        )
+        logger.info(
+            f"Cover mode: {count} consecutive part(s) of ~{_max:.0f}s "
+            f"= the whole video."
+        )
+        return count
+
     if args.clips is not None:
         return args.clips
 
@@ -293,13 +322,20 @@ def resolve_num_clips(args: argparse.Namespace, logger: Logger, batch: bool = Fa
 def build_config(args: argparse.Namespace, num_clips: int) -> Config:
     min_duration = args.min_duration
     max_duration = args.max_duration
-    if args.platform:
+    cover_full = bool(getattr(args, "cover_full", False))
+    cover_parts = None
+    if cover_full:
+        cover_parts = plan_full_coverage(
+            probe_duration(args.video),
+            float(getattr(args, "part_length", 60.0) or 60.0),
+        )
+    if args.platform and not cover_full:
         preset = PLATFORM_PRESETS[args.platform]
         if min_duration is None:
             min_duration = preset["min_duration"]
         if max_duration is None:
             max_duration = preset["max_duration"]
-    return Config(
+    config = Config(
         video_path=args.video,
         output_dir=args.output,
         whisper_model=args.model,
@@ -314,10 +350,21 @@ def build_config(args: argparse.Namespace, num_clips: int) -> Config:
         burn_captions=args.captions,
         add_title_overlay=args.title_overlay,
         normalize_audio=not args.no_audio_normalize,
-        split_evenly=args.split_evenly,
+        split_evenly=True if cover_full else args.split_evenly,
+        cover_full=cover_full,
+        part_length=float(getattr(args, "part_length", 60.0) or 60.0),
         fix_lighting=args.fix_lighting,
         lighting_strength=args.lighting_strength,
     )
+    if cover_parts is not None:
+        count, cover_min, cover_max = cover_parts
+        config.num_clips = count
+        config.min_duration = cover_min
+        config.max_duration = cover_max
+        # Coverage goal: do not drop weak moments, or the lecture gets
+        # holes exactly where the speaker paused for breath.
+        config.min_score_threshold = 0.0
+    return config
 
 
 def _load_candidates(path):

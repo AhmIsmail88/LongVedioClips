@@ -230,6 +230,49 @@ def _greedy_keep(
     return kept, dropped_time, dropped_text
 
 
+def _cover_timeline(
+    clips: list[ScoredClip],
+    video_duration: float,
+    max_duration: float,
+    stats: dict,
+) -> list[ScoredClip]:
+    """Cover-mode selection: walk the timeline and, at each uncovered
+    moment, take the candidate that reaches furthest (ties: higher
+    score). Adjacency is the goal, not a repeat to reject - so a
+    lecture comes out as consecutive parts that tile the whole video
+    instead of a scattered best-of with holes.
+    """
+    if not clips:
+        return []
+    remaining = sorted(clips, key=lambda c: (c.start, c.end))
+    kept: list[ScoredClip] = []
+    position = 0.0
+    while position < video_duration - 0.5 and remaining:
+        in_reach = [c for c in remaining if c.end > position + 0.5]
+        if not in_reach:
+            break
+        near = [c for c in in_reach if c.start <= position + 2.0]
+        if near:
+            # Continue contiguously: the part that covers the most ground.
+            best = max(
+                near, key=lambda c: (min(c.end, video_duration), c.score)
+            )
+        else:
+            # A gap with no candidate starting nearby: bridge it from the
+            # earliest remaining moment instead of jumping further ahead.
+            best = min(
+                in_reach,
+                key=lambda c: (c.start, -min(c.end, video_duration)),
+            )
+        kept.append(best)
+        remaining.remove(best)
+        next_position = min(best.end, video_duration)
+        position = next_position if next_position > position else position + 1.0
+    stats["cover_parts"] = len(kept)
+    stats["cover_span"] = sum(c.duration for c in kept) / max(video_duration, 1e-6)
+    return kept
+
+
 def _fill_chronologically(
     clips: list[ScoredClip],
     kept: list[ScoredClip],
@@ -835,6 +878,29 @@ def select_final_clips(
     stats["boundary_snapped"] = snapped
     stats["boundary_word_snapped"] = word_snapped
     stats["boundary_pause_snapped"] = pause_snapped
+
+    if getattr(config, "cover_full", False):
+        top = _cover_timeline(filtered, video_duration, config.max_duration, stats)
+        stats["final"] = len(top)
+        span = sum(c.duration for c in top)
+        logger.info(
+            f"Cover mode: {len(top)} consecutive part(s), "
+            f"{span:.0f}s of {video_duration:.0f}s covered "
+            f"({100 * span / max(video_duration, 1e-6):.0f}%)."
+        )
+        top.sort(key=lambda c: c.start)
+        return [
+            FinalClip(
+                index=i + 1,
+                start=c.start,
+                end=c.end,
+                score=c.score,
+                reason=c.reason,
+                text=c.text,
+                title=c.title,
+            )
+            for i, c in enumerate(top)
+        ]
 
     deduped = remove_overlaps(
         filtered,

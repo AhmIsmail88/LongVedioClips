@@ -39,7 +39,7 @@ def fake_ollama(fail_above: int | None = None, fail_always: bool = False,
     """
     calls: list[int] = []
 
-    def fake(host, model, system, user, timeout):
+    def fake(host, model, system, user, timeout, **_kwargs):
         spans = [(float(s), float(e)) for _, s, e in _SPAN_RE.findall(user)]
         calls.append(len(spans))
         if fail_always or (fail_above is not None and len(spans) > fail_above):
@@ -76,7 +76,9 @@ def fake_ollama(fail_above: int | None = None, fail_always: bool = False,
 class BatchRetryTests(unittest.TestCase):
     def setUp(self):
         self.segments = make_synthetic_transcript(600)
-        self.config = Config(num_clips=8, llm_batch_size=8)
+        # resume=False: keep the tests fully isolated from any scores.json
+        # a previous run (or test) may have left in the shared output dir.
+        self.config = Config(num_clips=8, llm_batch_size=8, resume=False)
         self.candidates = candidate_generator.generate_candidates(
             self.segments,
             window_sizes=self.config.candidate_window_sizes,
@@ -147,11 +149,11 @@ class BatchRetryTests(unittest.TestCase):
         self.assertTrue(
             any("produced scores" in line or "incomplete" in line for line in logger.warnings),
         )
-        # One retry round on the full batch plus one halved sub-batch round
-        # - not an unbounded retry storm.
+        # Attempts: full batch (3) + two halves (2x3) + four quarters
+        # (4x3) = 21 per failing batch - bounded, not a retry storm.
         self.assertEqual(
             stats["llm_calls"],
-            stats["batches_attempted"] * (self.config.llm_max_retries + 1) * 3,
+            stats["batches_attempted"] * (self.config.llm_max_retries + 1) * 7,
         )
 
     def test_missing_clips_key_is_treated_as_a_failure(self):

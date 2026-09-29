@@ -75,7 +75,7 @@ def fake_ollama(mode: str):
     user prompt, so the fake stays faithful to what the model was sent.
     """
 
-    def fake(host, model, system, user, timeout):
+    def fake(host, model, system, user, timeout, **_kwargs):
         spans = [(int(i), float(s), float(e)) for i, s, e in _SPAN_RE.findall(user)]
         half = len(spans) // 2
         entries = []
@@ -105,7 +105,9 @@ def fake_ollama(mode: str):
 class LayeredMatchingTests(unittest.TestCase):
     def setUp(self):
         self.candidates = make_candidates()
-        self.config = Config(llm_batch_size=N, llm_max_retries=0)
+        # resume=False: stay isolated from any scores.json left behind by
+        # other runs in the shared default output directory.
+        self.config = Config(llm_batch_size=N, llm_max_retries=0, resume=False)
         self.logger = QuietLogger()
         self.stats: dict = {}
         self.original = clip_selector._call_ollama

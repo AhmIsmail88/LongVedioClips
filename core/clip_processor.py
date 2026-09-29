@@ -83,12 +83,20 @@ def render_clips(
         # these boundaries (analysis or a hand edit in the GUI), land
         # them on word edges using the transcript's word timestamps.
         if segments:
-            from core.quality_filter import _word_points, snap_to_word_edges
+            from core.quality_filter import (
+                _pause_points,
+                _word_points,
+                snap_to_pause_center,
+                snap_to_word_edges,
+            )
 
             _edges = _word_points(segments)
-            if snap_to_word_edges(clip, _edges):
+            _moved = snap_to_word_edges(clip, _edges)
+            if snap_to_pause_center(clip, _pause_points(segments), 1.2):
+                _moved = True
+            if _moved:
                 logger.info(
-                    f"{filename}: boundaries adjusted to complete words "
+                    f"{filename}: boundaries adjusted to natural breaks "
                     f"-> {clip.start:.1f}s-{clip.end:.1f}s"
                 )
 

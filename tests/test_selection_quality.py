@@ -250,9 +250,18 @@ class EvenSplitTests(unittest.TestCase):
     """"Split the video into N parts": the clip length comes from the count."""
 
     def test_three_clips_split_the_video_evenly(self):
+        # The caller passes the share itself as the max (the GUI does
+        # exactly this when no platform is chosen): full even coverage.
+        share = 3057.0 / 3
+        plan = plan_clip_band(3057.0, 3, 20.0, share, split_evenly=True)
+        self.assertAlmostEqual(plan.max_duration, share, places=1)
+
+    def test_explicit_max_caps_the_even_split(self):
+        # A platform limit ('shorts: max 60s') must win over the share:
+        # asking for 60-second clips must never return 10-minute ones
+        # just because the clip count is small.
         plan = plan_clip_band(3057.0, 3, 20.0, 60.0, split_evenly=True)
-        self.assertAlmostEqual(plan.max_duration, 3057.0 / 3, places=1)
-        self.assertTrue(plan.adapted)
+        self.assertLessEqual(plan.max_duration, 60.0)
 
     def test_the_share_ignores_the_duration_sliders(self):
         # Without even-split the 60s slider would cap it at 60s.
@@ -276,6 +285,45 @@ class EvenSplitTests(unittest.TestCase):
         for num_clips in (2, 3, 13, 30):
             plan = plan_clip_band(3057.0, num_clips, 20.0, 60.0, split_evenly=True)
             self.assertGreaterEqual(plan.max_feasible_clips, num_clips)
+
+
+class MicroPauseSnappingTests(unittest.TestCase):
+    """Cuts prefer a breath (micro-pause) over an arbitrary word edge."""
+
+    def _segments(self):
+        ws = [
+            Word(start=0.00, end=0.80, text="alpha"),
+            Word(start=1.10, end=1.90, text="beta"),
+            Word(start=2.40, end=3.20, text="gamma"),   # gap = 0.5s (centre 2.15)
+            Word(start=3.50, end=4.30, text="delta"),
+        ]
+        return [TranscriptSegment(start=0.0, end=4.3, text="x", words=ws)]
+
+    def test_start_moves_onto_a_nearby_breath_centre(self):
+        pauses = qf._pause_points(self._segments())
+        self.assertTrue(pauses)
+        c = clip(2.0, 4.2, 80.0, "t")
+        moved = qf.snap_to_pause_center(c, pauses, 1.2)
+        self.assertTrue(moved)
+        self.assertAlmostEqual(c.start, 2.15, places=2)
+
+    def test_deeper_breath_wins_over_a_nearer_shallow_one(self):
+        ws = [
+            Word(start=0.00, end=0.80, text="a"),
+            Word(start=0.90, end=1.70, text="b"),    # gap 0.10 (shallow)
+            Word(start=2.40, end=3.20, text="c"),    # gap 0.70 (deep, centre 2.05)
+            Word(start=3.50, end=4.30, text="d"),
+        ]
+        pauses = qf._pause_points([TranscriptSegment(start=0.0, end=4.3, text="x", words=ws)])
+        c = clip(1.9, 4.2, 80.0, "t")   # 1.9 is near the shallow gap; 2.05 is deeper
+        qf.snap_to_pause_center(c, pauses, 1.2)
+        self.assertAlmostEqual(c.start, 2.05, places=2)
+
+    def test_no_breath_in_reach_changes_nothing(self):
+        pauses = qf._pause_points(self._segments())
+        c = clip(4.0, 4.2, 80.0, "t")
+        moved = qf.snap_to_pause_center(c, pauses, 0.1)
+        self.assertFalse(moved)
 
 
 class QuietLogger:

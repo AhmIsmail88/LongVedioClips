@@ -577,7 +577,7 @@ def score_candidates(
         ):
             batches_reanchored += 1
         scored.extend(batch_clips)
-        if batch_clips:
+        if batch_clips and getattr(config, "resume", True):
             _save_scores(scores_path, reused + scored, fingerprint, config)
         if not produced:
             # _score_batch already counted this failed top-level batch.

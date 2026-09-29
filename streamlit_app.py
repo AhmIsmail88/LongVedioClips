@@ -495,6 +495,55 @@ def build_clips_zip(clips, dest_dir: Path) -> Path | None:
     return zip_path
 
 
+_FILE_SERVER_PORT: int | None = None
+_FILE_SERVER_ROOT: str | None = None
+
+
+def _ensure_file_server(directory: Path) -> int:
+    """Start a localhost-only file server for the clips folder (once per
+    process) and return its port.
+
+    Streamlit's download buttons carry the file bytes inside the app's
+    own data channel - with a 500 MB zip (or 145 MB clips) the page
+    itself becomes unloadable and the buttons silently stop working.
+    Plain HTTP links to a local server keep the page light and let the
+    browser download directly, with range support and no size limit on
+    the app channel.
+    """
+    global _FILE_SERVER_PORT, _FILE_SERVER_ROOT
+    _FILE_SERVER_ROOT = str(directory)
+    if _FILE_SERVER_PORT is not None:
+        return _FILE_SERVER_PORT
+
+    import http.server
+    import socketserver
+    import threading
+
+    class _Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=_FILE_SERVER_ROOT, **kwargs)
+
+        def log_message(self, *args):  # keep the console quiet
+            pass
+
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Handler)
+    server.daemon_threads = True
+    _FILE_SERVER_PORT = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return _FILE_SERVER_PORT
+
+
+def _download_link(path: Path, label: str) -> str:
+    """A plain link that downloads one file from the local server."""
+    from urllib.parse import quote
+
+    port = _ensure_file_server(path.parent)
+    return (
+        f'<a href="http://127.0.0.1:{port}/{quote(path.name)}" '
+        f"download>{label}</a>"
+    )
+
+
 # Stale-folders sweep: anything older than this is assumed abandoned
 # (a closed tab / crashed session) and is removed at startup. Long
 # enough that resuming an interrupted analysis still works days later.
@@ -892,14 +941,13 @@ def main() -> None:
                     st.caption(clip.text[:200])
                     if clip.output_path and Path(clip.output_path).exists():
                         st.video(clip.output_path)
-                        with open(clip.output_path, "rb") as f:
-                            st.download_button(
-                                f"⬇️ تنزيل المقطع {clip.index}",
-                                data=f.read(),
-                                file_name=f"clip_{clip.index:02d}.mp4",
-                                mime="video/mp4",
-                                key=f"dl_{clip.index}",
-                            )
+                        st.markdown(
+                            _download_link(
+                                Path(clip.output_path),
+                                f"⬇️ تحميل المقطع {clip.index} كملف",
+                            ),
+                            unsafe_allow_html=True,
+                        )
 
                 # One-click bulk download: every rendered clip in a ZIP.
                 # Built once per export (signature = count + total size)
@@ -924,24 +972,24 @@ def main() -> None:
                         _zip_path = None
                         st.warning(f"تعذر تجهيز ملف ZIP: {_ze}")
                     st.session_state["zip_sig"] = _zip_sig
-                    st.session_state["zip_bytes"] = (
-                        _zip_path.read_bytes() if _zip_path else None
+                    st.session_state["zip_path"] = (
+                        str(_zip_path) if _zip_path else None
                     )
                     st.session_state["zip_name"] = (
                         f"{Path(str(analysis['video_path'])).stem}_clips.zip"
                     )
-                if st.session_state.get("zip_bytes"):
-                    _zb = st.session_state["zip_bytes"]
-                    st.download_button(
-                        (
-                            "⬇️ تحميل كل المقاطع في ملف واحد "
-                            f"({len(rendered)} مقطع — {len(_zb) / (1024 * 1024):.0f} MB)"
+                _zp = st.session_state.get("zip_path")
+                if _zp and Path(_zp).exists():
+                    _size_mb = Path(_zp).stat().st_size / (1024 * 1024)
+                    st.markdown(
+                        _download_link(
+                            Path(_zp),
+                            (
+                                "⬇️ تحميل كل المقاطع في ملف واحد "
+                                f"({len(rendered)} مقطع — {_size_mb:.0f} MB)"
+                            ),
                         ),
-                        data=_zb,
-                        file_name=st.session_state.get("zip_name", "all_clips.zip"),
-                        mime="application/zip",
-                        key="dl_all_clips",
-                        type="primary",
+                        unsafe_allow_html=True,
                     )
             except PipelineError as e:
                 st.error(e.message)

@@ -469,6 +469,61 @@ def snap_to_word_edges(clip, words: list[tuple[float, float]], duration_cap: flo
     return moved
 
 
+def _pause_points(segments, min_gap: float = 0.25) -> list[tuple[float, float]]:
+    """Midpoints of audible micro-pauses between words: (time, gap length).
+
+    Speech runs only split on pauses >= pause_threshold_seconds, so a long
+    run can still contain plenty of short breaths (0.25s and up). Cutting
+    at the centre of such a breath sounds like a natural edit, and the
+    breath itself ends up trimmed off the clip edge.
+    """
+    points: list[tuple[float, float]] = []
+    for seg in segments:
+        prev_end = None
+        for w in (seg.words or []):
+            if not (w.text and w.text.strip()):
+                continue
+            if prev_end is not None:
+                gap = w.start - prev_end
+                if gap >= min_gap:
+                    points.append((prev_end + gap / 2.0, gap))
+            prev_end = w.end
+    points.sort()
+    return points
+
+
+def snap_to_pause_center(
+    clip, pauses: list[tuple[float, float]], max_snap: float
+) -> bool:
+    """Nudge boundaries onto the centre of a nearby breath, if one is in
+    reach. The deepest pause within `max_snap` wins (ties: closest). The
+    clip is never inverted. Returns True when anything moved.
+    """
+    if not pauses:
+        return False
+    moved = False
+    for attr in ("start", "end"):
+        value = getattr(clip, attr)
+        best = None
+        best_key = None
+        for moment, gap in pauses:
+            dist = abs(moment - value)
+            if dist <= 1e-9 or dist > max_snap:
+                continue
+            key = (gap, -dist)
+            if best_key is None or key > best_key:
+                best, best_key = moment, key
+        if best is None:
+            continue
+        if attr == "start" and best < clip.end - 0.5:
+            clip.start = best
+            moved = True
+        elif attr == "end" and best > clip.start + 0.5:
+            clip.end = best
+            moved = True
+    return moved
+
+
 def _speech_runs(
     segments: list[TranscriptSegment], pause_threshold: float
 ) -> list[tuple[float, float]]:
@@ -747,13 +802,22 @@ def select_final_clips(
     stats["speech_runs"] = len(runs)
     word_edges = _word_points(segments)
     stats["word_points"] = len(word_edges)
+    pause_points = _pause_points(segments)
+    stats["pause_points"] = len(pause_points)
+    micro_snap = max(0.6, config.boundary_snap_max_seconds * 0.5)
     word_snapped = 0
+    pause_snapped = 0
     snapped = 0
     for clip in filtered:
         # Exact first: never cut through a word (works on continuous
         # speech where no pause is near the boundary).
         if word_edges and snap_to_word_edges(clip, word_edges, video_duration):
             word_snapped += 1
+        # Then prefer an actual breath when one is close: a boundary deep
+        # inside continuous speech moves onto the nearest micro-pause
+        # centre, which sounds like a natural edit instead of a chop.
+        if pause_points and snap_to_pause_center(clip, pause_points, micro_snap):
+            pause_snapped += 1
         if runs:
             if snap_to_speech_boundary(
                 clip,
@@ -770,6 +834,7 @@ def select_final_clips(
         clamp_to_video_duration(clip, video_duration)
     stats["boundary_snapped"] = snapped
     stats["boundary_word_snapped"] = word_snapped
+    stats["boundary_pause_snapped"] = pause_snapped
 
     deduped = remove_overlaps(
         filtered,

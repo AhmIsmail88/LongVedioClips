@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from pathlib import Path
 
 
@@ -21,22 +22,40 @@ def meta_path(path) -> Path:
 
 
 def write_meta(path, **fields) -> None:
-    """Record the inputs an artifact was produced from (best effort)."""
+    """Record the inputs an artifact was produced from (best effort).
+
+    Written via a temp file + atomic replace so a concurrent reader
+    never sees a half-written sidecar.
+    """
     try:
-        meta_path(path).write_text(
+        target = meta_path(path)
+        tmp = target.with_name(target.name + ".tmp")
+        tmp.write_text(
             json.dumps(fields, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        tmp.replace(target)
     except OSError:
         pass
 
 
 def read_meta(path) -> dict:
-    """The recorded inputs, or {} when the artifact has no usable metadata."""
-    try:
-        data = json.loads(meta_path(path).read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    """The recorded inputs, or {} when the artifact has no usable metadata.
+
+    Sidecars are rewritten alongside their artifacts (e.g. after every
+    scoring batch), so a read can land on a momentary Windows lock or
+    a half-replaced file; retry briefly first, otherwise one blip
+    silently sends a whole video back to re-ranking.
+    """
+    for attempt in range(4):
+        try:
+            data = json.loads(meta_path(path).read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (PermissionError, FileNotFoundError):
+            if attempt == 3:
+                return {}
+            time.sleep(0.5)
+        except (OSError, ValueError):
+            return {}
 
 
 def video_identity(video_path) -> dict:

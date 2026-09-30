@@ -381,6 +381,25 @@ def _save_scores(path, clips, fingerprint, config) -> None:
         pass  # scoring continues even if the checkpoint cannot be written
 
 
+def _read_json_with_retry(path, attempts: int = 4, delay: float = 0.5):
+    """Load JSON, retrying briefly on transient Windows file locks.
+
+    The scores checkpoint is rewritten (tmp file + atomic replace)
+    after every batch; a reader landing right on a replace - or a
+    virus scanner briefly holding the fresh file - can get
+    PermissionError. A short retry beats re-ranking a whole video
+    over a momentary lock: a real 101-minute run lost its 600 saved
+    scores to one such blip and re-ranked for 42 minutes.
+    """
+    for attempt in range(attempts):
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except (PermissionError, FileNotFoundError):
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+
+
 def _load_saved_scores(path, fingerprint, config, logger):
     """Scores from an earlier run of this same video+settings, if any."""
     from models.schemas import ScoredClip
@@ -389,7 +408,7 @@ def _load_saved_scores(path, fingerprint, config, logger):
     if not reuse_if_fresh(path, fingerprint, config):
         return []
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        data = _read_json_with_retry(path)
         clips = [ScoredClip.from_dict(d) for d in data.get("clips", [])]
     except (OSError, ValueError, KeyError, TypeError) as e:
         logger.warn(f"Could not reuse the saved scores ({e}); ranking again.")

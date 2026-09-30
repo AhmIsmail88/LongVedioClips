@@ -180,6 +180,34 @@ class BatchRetryTests(unittest.TestCase):
         self.assertEqual(len(scored), len(self.candidates))
         self.assertGreaterEqual(stats["retries"], 1)
 
+    def test_scores_read_retries_a_transient_lock(self):
+        """A momentary Windows lock on the checkpoint must not throw
+        away a whole ranking (a real run re-ranked 600 candidates over
+        one such blip).
+        """
+        import tempfile
+
+        path = Path(tempfile.mkdtemp()) / "scores.json"
+        path.write_text('{"clips": []}', encoding="utf-8")
+        calls = {"n": 0}
+        real = Path.read_text
+
+        def flaky(self, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise PermissionError(13, "Permission denied")
+            return real(self, *args, **kwargs)
+
+        Path.read_text = flaky
+        try:
+            data = clip_selector._read_json_with_retry(
+                path, attempts=4, delay=0.01
+            )
+        finally:
+            Path.read_text = real
+        self.assertEqual(data, {"clips": []})
+        self.assertEqual(calls["n"], 3)
+
     def test_missing_clips_key_is_treated_as_a_failure(self):
         clip_selector._call_ollama = fake_ollama(missing_clips=True)
         stats: dict = {}

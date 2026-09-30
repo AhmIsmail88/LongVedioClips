@@ -170,7 +170,13 @@ def get_video_duration_seconds(uploaded_file, video_path: Path) -> float | None:
     """Probe (and cache) the uploaded video's duration, so we can suggest
     a sensible clip count before the user even presses Run.
     """
-    cache_key = f"{uploaded_file.name}_{uploaded_file.size}"
+    if uploaded_file is not None:
+        cache_key = f"{uploaded_file.name}_{uploaded_file.size}"
+    else:
+        try:
+            cache_key = f"{video_path.name}_{video_path.stat().st_size}"
+        except OSError:
+            cache_key = str(video_path)
     if st.session_state.get("probed_key") != cache_key:
         try:
             st.session_state.probed_duration = probe_duration(str(video_path))
@@ -614,6 +620,42 @@ def main() -> None:
         # last set for it.
         slider_key = f"num_clips_{uploaded_file.name}_{uploaded_file.size}"
 
+    # Large videos (>200 MB by default) are rejected by the browser
+    # upload limit; pasting an absolute path skips the upload entirely
+    # and reads the file in place.
+    path_text = st.text_input(
+        "أو الصق مسار ملف الفيديو مباشرة (بديل الرفع - الأفضل للملفات الكبيرة)",
+        value="",
+        help=(
+            "من File Explorer: Shift + كليك يمين على الملف → Copy as path، والصق هنا. بيشتغل مع أي حجم بدون رفع."
+        ),
+        key="video_path_text",
+    )
+    if uploaded_file is None and path_text.strip():
+        _candidate = Path(path_text.strip().strip('"'))
+        if _candidate.is_file():
+            video_path = _candidate
+            video_duration_seconds = get_video_duration_seconds(None, video_path)
+            if video_duration_seconds:
+                suggested_clips = suggest_num_clips(video_duration_seconds)
+            slider_key = f"num_clips_{_candidate.name}_{_candidate.stat().st_size}"
+            if "work_dir" not in st.session_state:
+                _prev = _find_previous_work_dir(
+                    _candidate.name, _candidate.stat().st_size
+                )
+                if _prev is not None:
+                    st.session_state.work_dir = str(_prev)
+                    st.info("لقيت مجلد جلسة سابقة لنفس الفيديو - "
+"التحليل هيكمل من آخر نقطة محفوظة.")
+                else:
+                    st.session_state.work_dir = tempfile.mkdtemp(prefix="lvc_")
+            st.success(
+                f"هيتم قراءة الملف مباشرة: {_candidate.name} "
+                f"({_candidate.stat().st_size // (1024 * 1024)} MB)"
+            )
+        else:
+            st.warning("المسار اللي كتبته مش موجود — راجعه أو ارفع الفيديو عادي.")
+
     with st.sidebar:
         st.header("الإعدادات")
         num_clips = st.slider(
@@ -831,10 +873,10 @@ def main() -> None:
                 )
 
     analyze_clicked = st.button(
-        "🔍 حلّل الفيديو", type="primary", disabled=uploaded_file is None
+        "🔍 حلّل الفيديو", type="primary", disabled=video_path is None
     )
 
-    if analyze_clicked and uploaded_file is not None and video_path is not None:
+    if analyze_clicked and video_path is not None:
         analyze_config = Config(
             video_path=str(video_path),
             output_dir=str(Path(st.session_state.work_dir) / "output"),

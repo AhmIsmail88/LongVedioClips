@@ -354,14 +354,27 @@ class CoverTimelineTests(unittest.TestCase):
     """Cover mode tiles the timeline instead of dropping neighbouring parts."""
 
     def test_parts_cover_almost_the_whole_timeline(self):
+        # Candidates every ~4s, like the real generator produces.
         cands = [
             clip(float(i), min(46.0, i + 12.0), 80.0, f"t{i}")
-            for i in range(0, 46, 8)
+            for i in range(0, 42, 4)
         ]
         kept = qf._cover_timeline(cands, 46.0, 15.0, {})
         self.assertTrue(kept)
         covered = sum(c.duration for c in kept)
         self.assertGreaterEqual(covered / 46.0, 0.9)
+
+    def test_covered_content_is_never_replayed(self):
+        cands = [
+            clip(0.0, 60.0, 90.0, "first part"),
+            clip(20.0, 80.0, 99.0, "replay trap"),
+            clip(59.0, 118.0, 50.0, "clean continuation"),
+        ]
+        kept = qf._cover_timeline(cands, 118.0, 60.0, {})
+        starts = sorted(c.start for c in kept)
+        self.assertIn(0.0, starts)
+        self.assertIn(59.0, starts)
+        self.assertNotIn(20.0, starts)
 
     def test_neighbouring_parts_are_both_kept(self):
         cands = [

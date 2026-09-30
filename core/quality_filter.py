@@ -251,19 +251,43 @@ def _cover_timeline(
         in_reach = [c for c in remaining if c.end > position + 0.5]
         if not in_reach:
             break
-        near = [c for c in in_reach if c.start <= position + 2.0]
+        # Cover mode keeps parts CONSECUTIVE: only candidates whose start
+        # sits within a boundary-snap's tolerance of the frontier are
+        # eligible - one starting deep inside covered ground would replay
+        # content the viewer has already seen (observed: 40s replays).
+        near = [
+            c
+            for c in in_reach
+            if position - 2.5 <= c.start <= position + 2.5
+        ]
         if near:
             # Continue contiguously: the part that covers the most ground.
             best = max(
                 near, key=lambda c: (min(c.end, video_duration), c.score)
             )
         else:
-            # A gap with no candidate starting nearby: bridge it from the
-            # earliest remaining moment instead of jumping further ahead.
-            best = min(
-                in_reach,
-                key=lambda c: (c.start, -min(c.end, video_duration)),
-            )
+            # Sparse spot. A small replay (a part starting just behind the
+            # frontier) beats an uncovered hole in a serialised series.
+            behind = [
+                c
+                for c in in_reach
+                if position - 6.0 <= c.start < position - 2.5
+            ]
+            future = [c for c in in_reach if c.start > position + 2.5]
+            if behind:
+                best = max(
+                    behind,
+                    key=lambda c: (min(c.end, video_duration), c.score),
+                )
+            elif future:
+                # No near or behind candidate: bridge from the earliest
+                # remaining moment instead of jumping further ahead.
+                best = min(
+                    future,
+                    key=lambda c: (c.start, -min(c.end, video_duration)),
+                )
+            else:
+                break
         kept.append(best)
         remaining.remove(best)
         next_position = min(best.end, video_duration)

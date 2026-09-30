@@ -21,6 +21,7 @@ import os
 import tempfile
 
 from models.schemas import FinalClip, TranscriptSegment, Word
+from utils.sanitize import load_blocklist, mask_text
 
 
 def _seconds_to_ass_time(seconds: float) -> str:
@@ -117,6 +118,10 @@ def build_ass_file(
     if not burn_captions and not (add_title_overlay and clip.title):
         return None
 
+    # On-screen text must never show a blocked word: mask captions and
+    # the title before anything reaches the .ass file (see utils/sanitize).
+    blocklist = load_blocklist()
+
     caption_size = max(18, int(output_height * 0.045))
     title_size = max(24, int(output_height * 0.06))
     caption_margin_v = int(output_height * 0.12)
@@ -135,12 +140,13 @@ def build_ass_file(
         end_t = min(title_duration_seconds, max(clip.duration, 0.5))
         lines.append(
             f"Dialogue: 0,{_seconds_to_ass_time(0)},{_seconds_to_ass_time(end_t)},"
-            f"Title,,0,0,0,,{_escape_ass_text(clip.title)}\n"
+            f"Title,,0,0,0,,{_escape_ass_text(mask_text(clip.title, blocklist))}\n"
         )
 
     if burn_captions:
         words = _collect_words_in_range(segments, clip.start, clip.end)
         for w_start, w_end, text in _group_words(words, words_per_caption):
+            text = mask_text(text, blocklist)
             rel_start = max(0.0, w_start - clip.start)
             rel_end = max(rel_start + 0.1, w_end - clip.start)
             lines.append(

@@ -1,0 +1,8 @@
+# Streamlit server settings for this app.
+#
+# The default upload limit is 200 MB, which rejects most lecture
+# recordings ("a video bigger than 200 MB doesn't upload"). 4 GB
+# covers raw lecture files; anything even larger can be read in place
+# by pasting its path into the sidebar instead of uploading.
+[server]
+maxUploadSize = 4096

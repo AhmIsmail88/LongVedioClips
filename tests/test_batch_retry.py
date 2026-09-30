@@ -156,6 +156,30 @@ class BatchRetryTests(unittest.TestCase):
             stats["batches_attempted"] * (self.config.llm_max_retries + 1) * 7,
         )
 
+    def test_degenerate_single_entry_answer_is_retried_not_kept(self):
+        """The model occasionally answers a whole batch with ONE valid
+        entry; that must be retried, not accepted (which silently lost
+        the rest of the slice in a real 101-minute run).
+        """
+        full = fake_ollama()
+        calls = {"n": 0}
+
+        def fake(host, model, system, user, timeout, **_kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                out = json.loads(full(host, model, system, user, timeout))
+                out["clips"] = out["clips"][:1]
+                return json.dumps(out)
+            return full(host, model, system, user, timeout)
+
+        clip_selector._call_ollama = fake
+        stats: dict = {}
+        scored = clip_selector.score_candidates(
+            self.candidates, self.config, QuietLogger(), stats_out=stats
+        )
+        self.assertEqual(len(scored), len(self.candidates))
+        self.assertGreaterEqual(stats["retries"], 1)
+
     def test_missing_clips_key_is_treated_as_a_failure(self):
         clip_selector._call_ollama = fake_ollama(missing_clips=True)
         stats: dict = {}

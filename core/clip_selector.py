@@ -69,10 +69,13 @@ code fences:
 # and the batch is sized from the payload that actually gets sent.
 _MAX_CANDIDATE_CHARS = 1200
 _CANDIDATE_HEAD_CHARS = 850
-# Slightly under the previous 16000 so the model always has room to
-# finish its JSON answer inside the context window (Arabic runs ~2.5
-# chars/token; overflow showed up as truncated batches scoring 1/13).
-_BATCH_TARGET_CHARS = 14000
+# Candidate-text budget per request. Arabic runs ~2.5 chars/token and
+# Ollama's context is 8192 tokens (num_ctx below): 10000 chars ~=
+# 4000 prompt tokens + ~500 system + room for the ~2500-token JSON
+# answer stays safely inside the window. (A measured 101-minute run:
+# 16 x 875-char candidates ~= 8200 tokens total -> batches truncated
+# mid-JSON and salvaged a single entry; budget tightened accordingly.)
+_BATCH_TARGET_CHARS = 10000
 # How many times a failing batch may be halved: 13 -> 6/7 -> 3/4.
 _MAX_SPLIT_DEPTH = 2
 _BATCH_TARGET_SECONDS = 1000.0
@@ -420,6 +423,7 @@ def _score_batch(
     attempts = max(1, config.llm_max_retries + 1)
     user_prompt = _build_user_prompt(batch)
     last_error: Exception | str | None = None
+    best_partial: list[ScoredClip] | None = None
 
     for attempt in range(attempts):
         stats["llm_calls"] += 1
@@ -438,11 +442,24 @@ def _score_batch(
             parsed = _extract_json(raw)
             clips = _parse_entries(parsed, batch, candidate_by_span, logger, stats)
             if clips:
-                return clips, True
-            # A parseable response with nothing usable in it is just as
-            # lost as a failed call - retry it rather than silently
-            # dropping the whole slice of the video.
-            last_error = "response contained no usable clip entries"
+                # The model occasionally returns a single valid entry
+                # for a whole batch. Accepting that would silently lose
+                # the rest of the slice, so a < 60% answer counts as a
+                # failed attempt (retry, then split); keep it only as a
+                # floor in case every later attempt does worse.
+                if len(batch) >= 4 and len(clips) * 5 < len(batch) * 3:
+                    if best_partial is None or len(clips) > len(best_partial):
+                        best_partial = clips
+                    last_error = (
+                        f"partial response ({len(clips)} of {len(batch)} entries)"
+                    )
+                else:
+                    return clips, True
+            else:
+                # A parseable response with nothing usable in it is just
+                # as lost as a failed call - retry it rather than
+                # silently dropping the whole slice of the video.
+                last_error = "response contained no usable clip entries"
         except PipelineError:
             # Ollama unreachable / empty response: that's an environment
             # problem affecting every batch, so fail fast and loudly
@@ -469,6 +486,10 @@ def _score_batch(
             stats["sub_batches_failed"] += 1
         if not ok_right:
             stats["sub_batches_failed"] += 1
+        if not ok_left and not ok_right and best_partial is not None:
+            # Even the halves came back empty - a degenerate parent
+            # answer beats losing the whole slice.
+            return best_partial, True
         if depth == 0:
             if ok_left or ok_right:
                 stats["batches_partial"] += 1
@@ -476,6 +497,13 @@ def _score_batch(
                 stats["batches_failed"] += 1
         return left + right, ok_left or ok_right
 
+    if best_partial is not None:
+        logger.warn(
+            f"Keeping {len(best_partial)} usable entr(y/ies) the model "
+            f"returned for a batch of {len(batch)} - the rest could not "
+            f"be scored."
+        )
+        return best_partial, True
     if depth == 0:
         stats["batches_failed"] += 1
     logger.warn(

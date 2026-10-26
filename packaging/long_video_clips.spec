@@ -22,6 +22,8 @@ sys.path.insert(0, root)
 datas = [
     (os.path.join(root, "core", "desktop_translations.json"), "core"),
     (os.path.join(root, "profanity.txt"), "."),
+    (os.path.join(root, "assets", "icon.png"), "assets"),
+    (os.path.join(root, "assets", "icon.ico"), "assets"),
 ]
 weights = os.path.join(root, "yolov8n.pt")
 if os.path.isfile(weights):
@@ -83,7 +85,8 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="LongVideoClips",
+    name="MomentForgeAI",
+    icon=os.path.join(root, "assets", "icon.ico"),
     debug=False,
     strip=False,
     upx=False,
@@ -97,5 +100,5 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,
-    name="LongVideoClips",
+    name="MomentForgeAI",
 )

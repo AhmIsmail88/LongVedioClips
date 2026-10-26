@@ -30,6 +30,7 @@ from core.ui_theme import (  # noqa: F401 - إعادة تصدير للاختبا
     clip_unit,
     frame_pixmap,
     open_folder,
+    resource_path,
     set_ph,
     set_tip,
     stage_label,
@@ -44,7 +45,7 @@ def main() -> int:
     ensure_stdio()
     try:
         from PySide6.QtCore import Qt
-        from PySide6.QtGui import QFont
+        from PySide6.QtGui import QFont, QIcon
         from PySide6.QtWidgets import QApplication
 
         from ui.pages import MainWindow
@@ -60,6 +61,9 @@ def main() -> int:
     apply_dark_palette(app)
     app.setFont(QFont("Segoe UI", 10))
     app.setStyleSheet(QSS)
+    icon = resource_path("assets", "icon.png")
+    if icon.is_file():
+        app.setWindowIcon(QIcon(str(icon)))
     window = MainWindow()
     window.resize(1280, 800)
     window.show()

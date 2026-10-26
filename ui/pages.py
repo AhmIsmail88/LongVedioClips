@@ -27,6 +27,7 @@ from core.ui_theme import (  # noqa: F401 - تُستخدم عبر الفئات �
     clip_unit,
     frame_pixmap,
     open_folder,
+    resource_path,
     set_ph,
     set_tip,
     stage_label,
@@ -35,7 +36,7 @@ from core.ui_theme import (  # noqa: F401 - تُستخدم عبر الفئات �
 
 try:
     from PySide6.QtCore import Qt, QThread, Signal, QTimer, QUrl
-    from PySide6.QtGui import QColor, QKeySequence, QPalette, QShortcut
+    from PySide6.QtGui import QColor, QIcon, QKeySequence, QPalette, QShortcut
     from PySide6.QtWidgets import (
         QApplication, QButtonGroup, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
         QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog,
@@ -2077,6 +2078,9 @@ if QT_IMPORT_ERROR is None:
         def __init__(self) -> None:
             super().__init__()
             self.setWindowTitle(STRINGS["app_title"])
+            icon_file = resource_path("assets", "icon.png")
+            if icon_file.is_file():
+                self.setWindowIcon(QIcon(str(icon_file)))
             self.setMinimumSize(900, 620)
 
             root = QWidget()

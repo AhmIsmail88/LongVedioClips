@@ -34,7 +34,7 @@ Write-Host "بناء التطبيق إلى $dist ..."
 & $python -m PyInstaller --noconfirm --clean --distpath $dist --workpath $work $spec
 if ($LASTEXITCODE -ne 0) { throw 'فشل البناء' }
 
-$exe = Join-Path $dist 'LongVideoClips\LongVideoClips.exe'
+$exe = Join-Path $dist 'MomentForgeAI\MomentForgeAI.exe'
 if (-not (Test-Path $exe)) { throw "لم يُنتج الملف المتوقع: $exe" }
 
 $size = [math]::Round(((Get-ChildItem (Split-Path $exe) -Recurse | Measure-Object Length -Sum).Sum / 1MB), 1)

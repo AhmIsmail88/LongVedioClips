@@ -8,15 +8,22 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+
+def resource_path(*parts) -> Path:
+    """مسار ملف مرفق مع التطبيق (من المصدر أو من داخل ملف مُغلّف)."""
+    base = Path(getattr(sys, "_MEIPASS", REPO_ROOT))
+    return base.joinpath(*parts)
+
 STRINGS = {
-    "app_title": "استوديو المقاطع — Long Video Clips",
-    "brand": "استوديو المقاطع",
-    "brand_sub": "Long Video Clips",
+    "app_title": "MomentForge AI",
+    "brand": "MomentForge",
+    "brand_sub": "AI",
     "footer": "المعالجة محلية · التحميل يحتاج اتصالًا",
     "nav": {
         "lib": "مكتبتي",

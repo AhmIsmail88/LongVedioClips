@@ -1,4 +1,8 @@
-# Long Video → TikTok Clips (MVP)
+# MomentForge AI
+
+**MomentForge AI** — من فيديو طويل إلى مقاطع عمودية جاهزة للنشر، محليًا بالكامل.
+
+![MomentForge AI — من فيديو طويل إلى مقاطع TikTok](assets/banner.png)
 
 أداة محلية بالكامل تأخذ فيديو طويل (بودكاست، مقابلة، محاضرة) وتستخرج تلقائيًا
 أفضل اللحظات القصيرة وتصدّرها كمقاطع عمودية (1080×1920) جاهزة لـ TikTok /
@@ -37,7 +41,9 @@ ollama pull qwen3.5:9b        # أول مرة فقط
    ```
 
 3. في **Start in** ضع: `D:\coding\py\long-video-clips`
-4. سمّه «استوديو المقاطع» — `pythonw` يشغّل الواجهة بدون نافذة كونسول.
+4. سمّه «MomentForge AI» — `pythonw` يشغّل الواجهة بدون نافذة كونسول.
+
+> لو بنيت النسخة المغلّفة، أنشئ الاختصار على `dist\MomentForgeAI\MomentForgeAI.exe` بدل ذلك — فتظهر أيقونة التطبيق على سطح المكتب تلقائيًا.
 
 ### أول فيديو في 4 خطوات
 
@@ -231,7 +237,7 @@ output/
 .\packaging\build.ps1               # بناء لاحق
 ```
 
-الناتج: `dist\LongVideoClips\LongVideoClips.exe` (مجلد كامل، نحو 680MB).
+الناتج: `dist\MomentForgeAI\MomentForgeAI.exe` (مجلد كامل، نحو 680MB).
 لا تُضمَّن أوزان النماذج (Whisper/Ollama) — تُنزَّل عند أول استخدام. ffmpeg
 مضمّن عبر `static_ffmpeg`، ونموذج الفحص البصري (`nudenet/320n.onnx`) مضمّن أيضًا.
 القص الذكي (torch) مستبعد افتراضيًا لتقليل الحجم؛ أعد البناء بـ`-WithTorch` لتضمينه.
@@ -241,7 +247,7 @@ output/
 البرنامج المُغلّف ابنِ بـ`-WithTorch` (يزيد الحجم كثيرًا).
 
 **نقطة معمارية مهمة:** التطبيق يشغّل التحليل والتصدير والتحميل كعمليات فرعية.
-في النسخة المُغلّفة تُستدعى عبر `LongVideoClips.exe --run-module core.…`
+في النسخة المُغلّفة تُستدعى عبر `MomentForgeAI.exe --run-module core.…`
 (انظر `core/child_process.py`)، ولهذا تعمل داخل EXE. تم التحقق من نسخة مبنية:
 `--smoke` يبني كل الصفحات، وعامل تحميل حقيقي كتب `status.json` وسجلّه بنجاح.
 

@@ -196,7 +196,7 @@ class TranscribeProgressTests(unittest.TestCase):
         self.assertLessEqual(len(progress), 20, "throttle cap is one line per 5%")
 
         # Monotonic, never past 100, and never two lines inside one percent.
-        for a, b in zip(percents, percents[1:]):
+        for a, b in zip(percents, percents[1:], strict=False):
             self.assertGreater(b, a)
             self.assertGreaterEqual(b - a, 1)
         self.assertTrue(all(0 <= p <= 100 for p in percents))
@@ -232,7 +232,7 @@ class TranscribeProgressTests(unittest.TestCase):
         self.assertEqual(percents, [5, 10, 33, 71, 99, 100])
         self.assertEqual(len(percents), len(set(percents)))
         self.assertLessEqual(len(percents), 20)
-        for a, b in zip(percents, percents[1:]):
+        for a, b in zip(percents, percents[1:], strict=False):
             self.assertGreater(b, a)
 
     def test_short_audio_emits_only_the_closing_line(self):

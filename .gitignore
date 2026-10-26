@@ -18,3 +18,20 @@ Thumbs.db
 
 # YOLO weights downloaded at runtime (smart reframe fallback)
 *.pt
+models/audio-screening/
+
+projects/
+downloads/
+audio_exports/
+
+# PyInstaller output
+dist/
+build/
+*.spec.bak
+
+# Local runs, caches and scratch files
+media_exports/
+.ruff_cache/
+.pytest_cache/
+.openclaw_*
+*.tmp

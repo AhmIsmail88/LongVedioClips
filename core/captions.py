@@ -21,16 +21,16 @@ import os
 import tempfile
 
 from models.schemas import FinalClip, TranscriptSegment, Word
-from utils.sanitize import load_blocklist, mask_text
+from utils.sanitize import load_blocklist, mask_text, is_placeholder_title
 
 
 def _seconds_to_ass_time(seconds: float) -> str:
     seconds = max(0.0, seconds)
-    hours = int(seconds // 3600)
-    minutes = int((seconds % 3600) // 60)
-    secs = seconds % 60
-    centiseconds = int(round((secs - int(secs)) * 100))
-    return f"{hours}:{minutes:02d}:{int(secs):02d}.{centiseconds:02d}"
+    ticks = int(round(seconds * 100))
+    hours, remainder = divmod(ticks, 360000)
+    minutes, remainder = divmod(remainder, 6000)
+    secs, centiseconds = divmod(remainder, 100)
+    return f"{hours}:{minutes:02d}:{secs:02d}.{centiseconds:02d}"
 
 
 def _escape_ass_text(text: str) -> str:
@@ -73,14 +73,44 @@ def _group_words(
     """Chunk words into short on-screen groups instead of showing a full
     sentence at once - the standard punchy short-form caption style.
     """
+    import re
     groups = []
-    for i in range(0, len(words), max(1, words_per_group)):
-        chunk = words[i : i + words_per_group]
-        text = " ".join(w.text.strip() for w in chunk if w.text.strip())
-        if not text:
+    chunk = []
+    def flush():
+        if chunk:
+            text = " ".join(w.text.strip() for w in chunk if w.text.strip())
+            if text:
+                groups.append((chunk[0].start, chunk[-1].end, text))
+            chunk.clear()
+    for word in sorted(words, key=lambda w: w.start):
+        if not word.text.strip():
             continue
-        groups.append((chunk[0].start, chunk[-1].end, text))
+        if chunk and (word.start - chunk[-1].end >= 0.45
+                      or len(chunk) >= max(1, words_per_group)
+                      or len(" ".join(w.text for w in chunk)) + len(word.text) > 42):
+            flush()
+        chunk.append(word)
+        if re.search(r"[.!?؟…]$", word.text.strip()):
+            flush()
+    flush()
     return groups
+
+
+def transcript_to_srt(segments, words_per_caption=5):
+    """Export timed captions without burning or modifying the source."""
+    def timestamp(seconds):
+        ticks = int(round(max(0.0, seconds) * 1000))
+        hours, ticks = divmod(ticks, 3600000)
+        minutes, ticks = divmod(ticks, 60000)
+        secs, millis = divmod(ticks, 1000)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+    duration = max((s.end for s in segments), default=0.0)
+    words = _collect_words_in_range(segments, 0, duration)
+    lines = []
+    for i, (start, end, text) in enumerate(_group_words(words, words_per_caption), 1):
+        text = mask_text(text, load_blocklist())
+        lines.append(f"{i}\n{timestamp(start)} --> {timestamp(end)}\n{text}\n")
+    return "\n".join(lines)
 
 
 _ASS_HEADER_TEMPLATE = """[Script Info]
@@ -136,7 +166,7 @@ def build_ass_file(
         )
     ]
 
-    if add_title_overlay and clip.title:
+    if add_title_overlay and clip.title and not is_placeholder_title(clip.title):
         end_t = min(title_duration_seconds, max(clip.duration, 0.5))
         lines.append(
             f"Dialogue: 0,{_seconds_to_ass_time(0)},{_seconds_to_ass_time(end_t)},"
@@ -148,7 +178,9 @@ def build_ass_file(
         for w_start, w_end, text in _group_words(words, words_per_caption):
             text = mask_text(text, blocklist)
             rel_start = max(0.0, w_start - clip.start)
-            rel_end = max(rel_start + 0.1, w_end - clip.start)
+            rel_end = min(clip.duration, max(rel_start + 0.1, w_end - clip.start))
+            if rel_end <= rel_start:
+                continue
             lines.append(
                 f"Dialogue: 0,{_seconds_to_ass_time(rel_start)},{_seconds_to_ass_time(rel_end)},"
                 f"Caption,,0,0,0,,{_escape_ass_text(text)}\n"

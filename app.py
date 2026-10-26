@@ -45,6 +45,7 @@ from utils.ffmpeg import check_ffmpeg_installed, probe_duration
 from utils.resume import (
     band_fingerprint,
     reuse_if_fresh,
+    read_meta,
     video_identity,
     whisper_fingerprint,
     write_meta,
@@ -85,6 +86,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--language", default=None, help="Force a language code (e.g. ar, en). Default: auto-detect.")
     parser.add_argument("--model", default="medium", help="faster-whisper model size (default: medium).")
+    parser.add_argument("--glossary-file", default="", help="ملف تصحيحات الكابشن (سطر لكل: الخطأ => الصحيح).")
+    parser.add_argument("--asr-hotwords", default="", help="كلمات متوقعة للتفريغ، مفصولة بفواصل.")
     parser.add_argument("--output", default="output", help="Output directory (default: output/).")
     parser.add_argument(
         "--min-duration",
@@ -184,6 +187,14 @@ def parse_args() -> argparse.Namespace:
         metavar="SECONDS",
         help="Target length of each part in --cover-full mode (default: 60).",
     )
+    parser.add_argument("--reframe-layout", choices=["single", "stacked"], default="single",
+                        help="Stacked: source left person above source right; requires --smart-reframe")
+    parser.add_argument("--podcast-top-share", type=float, choices=[0.5, 0.55, 0.6, 0.65, 0.7],
+                        default=0.6, help="Fraction of stacked frame occupied by top person")
+    parser.add_argument("--candidate-strategy", choices=["windows", "hybrid"], default="hybrid",
+                        help="Hybrid adds complete-idea proposals using Ollama before ranking")
+    parser.add_argument("--podcast-focus", choices=["largest", "left", "right", "auto"],
+                        default="largest", help="Auto is experimental audio-gated mouth motion")
     return parser.parse_args()
 
 
@@ -345,8 +356,14 @@ def build_config(args: argparse.Namespace, num_clips: int) -> Config:
         max_duration=60.0 if max_duration is None else max_duration,
         num_clips=num_clips,
         ollama_model=args.ollama_model,
+        glossary=_read_glossary(getattr(args, "glossary_file", "")),
+        asr_hotwords=getattr(args, "asr_hotwords", "") or "",
         ollama_host=args.ollama_host,
         use_smart_reframe=args.smart_reframe,
+        reframe_layout=getattr(args, "reframe_layout", "single"),
+        podcast_top_share=getattr(args, "podcast_top_share", 0.6),
+        podcast_focus=getattr(args, "podcast_focus", "largest"),
+        candidate_strategy=getattr(args, "candidate_strategy", "hybrid"),
         burn_captions=args.captions,
         add_title_overlay=args.title_overlay,
         normalize_audio=not args.no_audio_normalize,
@@ -422,27 +439,32 @@ def analyze(
     # `num_clips` clips of the requested length, the band shrinks so the
     # requested count can actually fit (and is reported as impossible when
     # even the floor doesn't fit).
-    plan = plan_clip_band(
-        video_duration,
-        config.num_clips,
-        config.min_duration,
-        config.max_duration,
-        config.max_overlap_ratio,
-        split_evenly=config.split_evenly,
-    )
-    for note in plan.notes:
-        logger.info(note)
-    logger.info(
-        (f"Adjusted clip band: {plan.summary()}" if plan.adapted else plan.summary())
-    )
-    if not plan.feasible:
-        logger.warn(
-            f"This {video_duration:.0f}s video can hold at most "
-            f"{plan.max_feasible_clips} non-overlapping clip(s) of "
-            f"{plan.min_duration:.0f}-{plan.max_duration:.0f}s, so the requested "
-            f"{config.num_clips} cannot all be produced."
+    if config.cover_full:
+        # Full coverage does not use the highlight count/duration band.
+        # Do not show impossible-highlight warnings for a valid lecture split.
+        effective_config=config
+    else:
+        plan = plan_clip_band(
+            video_duration,
+            config.num_clips,
+            config.min_duration,
+            config.max_duration,
+            config.max_overlap_ratio,
+            split_evenly=config.split_evenly,
         )
-    effective_config = apply_band_plan(config, plan)
+        for note in plan.notes:
+            logger.info(note)
+        logger.info(
+            (f"Adjusted clip band: {plan.summary()}" if plan.adapted else plan.summary())
+        )
+        if not plan.feasible:
+            logger.warn(
+                f"This {video_duration:.0f}s video can hold at most "
+                f"{plan.max_feasible_clips} non-overlapping clip(s) of "
+                f"{plan.min_duration:.0f}-{plan.max_duration:.0f}s, so the requested "
+                f"{config.num_clips} cannot all be produced."
+            )
+        effective_config = apply_band_plan(config, plan)
 
     logger.stage(2, "Extracting/transcribing audio...")
     transcript_path = config.transcript_path()
@@ -454,17 +476,34 @@ def analyze(
         lambda: transcriber.load_transcript(str(transcript_path)),
         "transcript",
     )
+    if config.cover_full and not (config.burn_captions or config.add_title_overlay):
+        segments = segments or []
     if segments is None:
+        from utils import corrections as caption_rules
+        pairs, hotwords, glossary_error = caption_rules.rules(
+            getattr(config, "glossary", ""), getattr(config, "asr_hotwords", ""))
+        if glossary_error:
+            logger.warn(f"Caption glossary ignored: {glossary_error}")
         with logger.timed("Transcription"):
-            segments = transcriber.transcribe(
-                video_path=config.video_path,
-                model_size=config.whisper_model,
-                language=config.language,
-                device=config.device,
-                compute_type_gpu=config.compute_type_gpu,
-                compute_type_cpu=config.compute_type_cpu,
-                logger=logger,
-            )
+            try:
+                segments = transcriber.transcribe(
+                    video_path=config.video_path,
+                    model_size=config.whisper_model,
+                    language=config.language,
+                    device=config.device,
+                    compute_type_gpu=config.compute_type_gpu,
+                    compute_type_cpu=config.compute_type_cpu,
+                    logger=logger,
+                    hotwords=hotwords,
+                )
+            except PipelineError as exc:
+                if not config.cover_full:
+                    raise
+                logger.warn(f"Captions unavailable ({exc}); full coverage will continue.")
+                segments = []
+            counts = caption_rules.apply(segments, pairs)
+            if counts:
+                logger.info("Caption corrections: " + caption_rules.summary(counts))
             transcriber.save_transcript(segments, str(transcript_path))
             write_meta(
                 transcript_path,
@@ -476,9 +515,25 @@ def analyze(
             )
 
     stats = stats_out if stats_out is not None else {}
-    stats["max_feasible_clips"] = plan.max_feasible_clips
-    stats["band_adapted"] = plan.adapted
+    stats["max_feasible_clips"] = plan_full_coverage(video_duration,config.part_length)[0] if config.cover_full else plan.max_feasible_clips
+    stats["band_adapted"] = False if config.cover_full else plan.adapted
     stats["requested"] = effective_config.num_clips
+
+    if config.cover_full:
+        final_clips = quality_filter.plan_complete_parts(
+            video_duration, config.part_length, segments
+        )
+        if config.add_title_overlay:
+            from core.titles import ensure_safe_titles
+            ensure_safe_titles(final_clips, segments, config, logger)
+        stats.update(quality_filter.timeline_coverage(final_clips, video_duration))
+        stats["final"] = len(final_clips)
+        stats["cover_span"] = stats["coverage_ratio"]
+        with open(config.analysis_path(), "w", encoding="utf-8") as f:
+            json.dump([c.to_dict() for c in final_clips], f, ensure_ascii=False, indent=2)
+        write_meta(config.analysis_path(), cover_full=True, duration=video_duration)
+        logger.info(f"Full coverage: {len(final_clips)} parts, no gaps; Ollama skipped.")
+        return final_clips, segments, video_duration
 
     logger.stage(3, "Generating candidates...")
     candidates_path = config.candidates_path()
@@ -490,7 +545,7 @@ def analyze(
         lambda: _load_candidates(candidates_path),
         "candidate list",
     )
-    if candidates is None:
+    if not candidates:
         with logger.timed("Candidate generation"):
             candidates = candidate_generator.generate_candidates(
                 segments,
@@ -500,6 +555,20 @@ def analyze(
                 max_duration=effective_config.max_duration,
                 max_candidates=effective_config.max_candidates,
             )
+            if effective_config.candidate_strategy == "hybrid":
+                from core.semantic_candidates import propose_candidates, merge_candidates
+                proposals = propose_candidates(segments, effective_config, logger, stats)
+                candidates = merge_candidates(candidates, proposals, effective_config)
+            # Context is shown to the ranker as excluded source material.
+            for candidate in candidates:
+                if candidate.segment_indices:
+                    first, last = candidate.segment_indices[0], candidate.segment_indices[-1]
+                    candidate.context_before = segments[first-1].text if first else ""
+                    candidate.context_after = segments[last+1].text if last+1 < len(segments) else ""
+            if not candidates:
+                from core.review_tools import word_candidates
+                candidates=word_candidates(segments,effective_config.min_duration,effective_config.max_duration)
+                if candidates:logger.warn("Using word-timed fallback candidates; review boundaries before exporting.")
             if not candidates:
                 raise PipelineError(
                     "No candidate segments could be generated from the transcript.",
@@ -549,9 +618,13 @@ def analyze(
             print("", flush=True)
             for line in quality_filter.describe_shortfall(stats):
                 logger.warn(line)
+        if config.add_title_overlay:
+            from core.titles import ensure_safe_titles
+            ensure_safe_titles(final_clips, segments, config, logger)
         with open(config.analysis_path(), "w", encoding="utf-8") as f:
             json.dump([c.to_dict() for c in final_clips], f, ensure_ascii=False, indent=2)
 
+    write_meta(config.analysis_path(), cover_full=False, duration=video_duration)
     return final_clips, segments, video_duration
 
 
@@ -580,6 +653,11 @@ def render_from_analysis(analysis_path: str, config: Config, logger: Logger) -> 
     through the whole pipeline again.
     """
     from models.schemas import FinalClip
+    from dataclasses import replace
+
+    saved = read_meta(analysis_path)
+    if saved.get("cover_full"):
+        config = replace(config, cover_full=True)
 
     with open(analysis_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -698,6 +776,16 @@ def run_batch(args: argparse.Namespace, logger: Logger) -> int:
             print(f"          {err}")
     print(f"\n  {len(results) - len(failed)} succeeded, {len(failed)} failed, total {total_elapsed:.1f}s")
     return 0 if not failed else 1
+
+
+def _read_glossary(path_text: str) -> str:
+    """يقرأ ملف القاموس؛ الخطأ يُظهر رسالة واضحة بدل traceback."""
+    if not path_text:
+        return ""
+    try:
+        return Path(path_text).read_text(encoding="utf-8")
+    except OSError as error:
+        raise SystemExit(f"تعذر قراءة ملف التصحيحات: {error}") from error
 
 
 def main() -> int:

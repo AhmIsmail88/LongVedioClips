@@ -145,7 +145,7 @@ def main() -> int:
             assert stats["entries_matched_by_position"] == 0
         else:
             assert stats["entries_matched_by_position"] == N
-        for clip, cand in zip(scored, batch):
+        for clip, cand in zip(scored, batch, strict=False):
             assert (clip.start, clip.end) == (cand.start, cand.end), "span not re-anchored"
         print(f"  -> all {N} entries live on their real candidate spans: "
               f"{scored[0].start:.2f}-{scored[0].end:.2f} .. "

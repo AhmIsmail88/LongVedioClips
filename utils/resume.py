@@ -59,10 +59,11 @@ def read_meta(path) -> dict:
 
 
 def video_identity(video_path) -> dict:
-    """Name + size, so artifacts from a different file are never reused."""
+    """Resolved path, size and modification time identify the current source."""
     try:
         p = Path(video_path)
-        return {"video": p.name, "video_size": p.stat().st_size}
+        return {"video": str(p.resolve()), "video_size": p.stat().st_size,
+                "video_mtime_ns": p.stat().st_mtime_ns}
     except OSError:
         return {"video": str(video_path), "video_size": 0}
 
@@ -75,7 +76,7 @@ def whisper_fingerprint(config) -> str:
     """Inputs that change the transcript (so changing the clip band or the
     number of clips does NOT force a 10-minute re-transcription)."""
     return _hash([
-        "whisper",
+        "whisper-v2-confidence",
         getattr(config, "whisper_model", ""),
         getattr(config, "language", ""),
     ])
@@ -89,7 +90,10 @@ def band_fingerprint(config) -> str:
         ("hook", "content", "story", "emotion", "standalone", "ending")
     )
     return _hash([
-        "band",
+        "band-v5-word-fallback",
+        whisper_fingerprint(config),
+        getattr(config, "ollama_host", ""),
+        getattr(config, "candidate_strategy", "windows"),
         getattr(config, "min_duration", 0),
         getattr(config, "max_duration", 0),
         getattr(config, "num_clips", 0),
@@ -113,4 +117,5 @@ def reuse_if_fresh(path, fingerprint, config) -> bool:
     return (
         meta.get("video") == ident["video"]
         and meta.get("video_size") == ident["video_size"]
+        and meta.get("video_mtime_ns") == ident.get("video_mtime_ns")
     )

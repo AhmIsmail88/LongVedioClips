@@ -83,7 +83,7 @@ def render_flat(work: Path, luma: int, vf: str) -> tuple[float, float]:
         subprocess.run(
             [
                 ffmpeg_bin, "-y", "-hide_banner", "-loglevel", "error",
-                "-f", "lavfi", "-i", f"color=black:s=160x120:r=10",
+                "-f", "lavfi", "-i", "color=black:s=160x120:r=10",
                 "-vf", f"geq=r='{luma}':g='{luma}':b='{luma}'",
                 "-t", "1", "-c:v", "libx264", "-preset", "ultrafast",
                 "-pix_fmt", "yuv420p", src,

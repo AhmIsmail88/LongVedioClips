@@ -133,7 +133,7 @@ class LayeredMatchingTests(unittest.TestCase):
             any("Re-anchored" in w for w in self.logger.warnings),
             "a fully timestamp-matched batch must not be reported as re-anchored",
         )
-        for clip, cand in zip(scored, self.candidates):
+        for clip, cand in zip(scored, self.candidates, strict=False):
             self.assertEqual((clip.start, clip.end), (cand.start, cand.end))
 
     def test_invented_timestamps_recovered_by_index(self):
@@ -143,15 +143,15 @@ class LayeredMatchingTests(unittest.TestCase):
         self.assertEqual(self.stats["entries_matched_by_index"], N)
         self.assertEqual(self.stats["entries_matched_by_position"], 0)
         self.assertEqual(self.stats["entries_dropped"], 0)
-        for k, (clip, cand) in enumerate(zip(scored, self.candidates)):
+        for k, (clip, cand) in enumerate(zip(scored, self.candidates, strict=False)):
             # The real candidate span and text win ...
             self.assertEqual((clip.start, clip.end), (cand.start, cand.end))
             self.assertEqual(clip.text, cand.text)
-            # ... while the model's score, sub-scores, reason and title stay.
+            # Scores survive; unvalidated model prose is withheld.
             self.assertEqual(clip.score, 70.0 + k)
             self.assertEqual(clip.hook_score, 70.0 + k)
-            self.assertEqual(clip.reason, f"reason for {k}")
-            self.assertEqual(clip.title, f"title for {k}")
+            self.assertEqual(clip.reason, "تقييم تلقائي لجودة المقطع")
+            self.assertEqual(clip.title, "")
         self.assertTrue(
             any("Re-anchored 16 of 16" in w and "16 by index, 0 by order" in w
                 and "timestamps were unusable." in w
@@ -176,7 +176,7 @@ class LayeredMatchingTests(unittest.TestCase):
         self.assertEqual(self.stats["entries_matched_by_index"], 0)
         self.assertEqual(self.stats["entries_matched_by_position"], N)
         self.assertEqual(self.stats["entries_dropped"], 0)
-        for k, (clip, cand) in enumerate(zip(scored, self.candidates)):
+        for k, (clip, cand) in enumerate(zip(scored, self.candidates, strict=False)):
             self.assertEqual((clip.start, clip.end), (cand.start, cand.end))
             self.assertEqual(clip.text, cand.text)
             self.assertEqual(clip.score, 70.0 + k)
@@ -201,7 +201,7 @@ class LayeredMatchingTests(unittest.TestCase):
         self.assertEqual(self.stats["entries_matched_by_index"], N - 1)
         self.assertEqual(self.stats["entries_matched_by_position"], 0)
         self.assertEqual(self.stats["entries_matched_by_timestamp"], 0)
-        for k, (clip, cand) in enumerate(zip(scored, self.candidates)):
+        for _k, (clip, cand) in enumerate(zip(scored, self.candidates, strict=False)):
             self.assertEqual((clip.start, clip.end), (cand.start, cand.end))
 
     def test_partial_batch_timestamp_matches_win_and_only_leftovers_reanchor(self):
@@ -212,7 +212,7 @@ class LayeredMatchingTests(unittest.TestCase):
         self.assertEqual(self.stats["entries_matched_by_index"], half)
         self.assertEqual(self.stats["entries_matched_by_position"], 0)
         self.assertEqual(self.stats["entries_dropped"], 0)
-        for clip, cand in zip(scored, self.candidates):
+        for clip, cand in zip(scored, self.candidates, strict=False):
             self.assertEqual((clip.start, clip.end), (cand.start, cand.end))
         self.assertTrue(
             any("Re-anchored 8 of 16" in w and "8 by index, 0 by order" in w
@@ -229,7 +229,7 @@ class LayeredMatchingTests(unittest.TestCase):
         self.assertEqual(self.stats["entries_matched_by_timestamp"], 0)
         self.assertEqual(self.stats["entries_matched_by_position"], N)
         self.assertEqual(self.stats["entries_dropped"], 0)
-        for clip, cand in zip(scored, self.candidates):
+        for clip, cand in zip(scored, self.candidates, strict=False):
             self.assertEqual((clip.start, clip.end), (cand.start, cand.end))
             self.assertEqual(clip.text, cand.text)
 

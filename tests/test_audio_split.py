@@ -42,7 +42,7 @@ class PlanPartsTests(unittest.TestCase):
         self.assertAlmostEqual(parts[-1][1], 9.0)
         for start, end in parts:
             self.assertAlmostEqual(end - start, 3.0, places=6)
-        for (_, end), (next_start, _) in zip(parts, parts[1:]):
+        for (_, end), (next_start, _) in zip(parts, parts[1:], strict=False):
             self.assertAlmostEqual(end, next_start, places=6)
 
     def test_uneven_division_still_covers_everything(self):
@@ -50,7 +50,7 @@ class PlanPartsTests(unittest.TestCase):
         self.assertEqual(len(parts), 3)
         self.assertAlmostEqual(parts[0][1], 10.0 / 3, places=6)
         self.assertAlmostEqual(parts[-1][1], 10.0)
-        for (_, end), (next_start, _) in zip(parts, parts[1:]):
+        for (_, end), (next_start, _) in zip(parts, parts[1:], strict=False):
             self.assertAlmostEqual(end, next_start, places=6)
 
     def test_single_part_is_the_whole_file(self):

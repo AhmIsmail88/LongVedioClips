@@ -300,12 +300,18 @@ class ScoringWeights:
 
 @dataclass
 class Config:
+    manual_crop: dict = field(default_factory=dict)
+    content_scan: bool = False
+    render_threads: int = 0
+    title_overrides: dict = field(default_factory=dict)
     # Input / output
     video_path: str = ""
     output_dir: str = "output"
 
     # Transcription
     whisper_model: str = "medium"
+    glossary: str = ""       # سطور «الخطأ => الصحيح» لتصحيح الكابشن
+    asr_hotwords: str = ""   # كلمات متوقعة تُوجّه التفريغ
     language: str | None = None  # None => auto-detect
     device: str = "auto"  # "auto" | "cuda" | "cpu"
     compute_type_gpu: str = "float16"
@@ -322,6 +328,7 @@ class Config:
     # all of them with the LLM would take days. Keep only the best N by
     # a cheap local heuristic, spread across the whole timeline.
     max_candidates: int = 600
+    candidate_strategy: str = "windows"  # UI/CLI opt into hybrid contextual proposals.
 
     # LLM ranking
     ollama_model: str = "qwen3.5:9b"
@@ -394,6 +401,16 @@ class Config:
     # Needs extra dependencies (see requirements-smart-reframe.txt) and is
     # noticeably slower - see core/smart_reframe.py.
     use_smart_reframe: bool = False
+    # Keep the full source frame with black padding (letterbox) instead
+    # of crop-to-fill. Default is crop-to-fill (False): letterboxing a
+    # 16:9 source into 9:16 wastes most of the screen and skewed the
+    # measured luma of every clip. Keep True only for deliberate
+    # full-frame exports.
+    preserve_full_frame: bool = False
+    # Stacked podcast crops use stable screen positions, not speaker inference.
+    reframe_layout: str = "single"
+    podcast_top_share: float = 0.6
+    podcast_focus: str = "largest"  # largest, left, right, auto (experimental)
 
     # Burned-in captions / intro title overlay (core/captions.py). Both
     # require an extra ffmpeg re-encode pass per clip after the main

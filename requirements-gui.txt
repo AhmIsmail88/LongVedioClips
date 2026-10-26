@@ -1,2 +1,3 @@
 -r requirements.txt
-streamlit>=1.60.0
+# Desktop interface dependencies (PySide6) for the desktop app as it gets built.
+PySide6>=6.6,<7

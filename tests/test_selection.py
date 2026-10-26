@@ -22,7 +22,6 @@ from _harness import (  # noqa: E402
     make_synthetic_transcript,
     run_stages_3_and_5,
     stub_score_candidates,
-    transcript_span,
 )
 
 sys.path.insert(0, str(REPO_ROOT))
@@ -35,7 +34,6 @@ from config import (  # noqa: E402
     plan_clip_band,
 )
 from core import candidate_generator, quality_filter  # noqa: E402
-from models.schemas import ScoredClip  # noqa: E402
 
 STORED = {
     "batch_test_1 (56s)": REPO_ROOT / "output" / "batch_test_1" / "transcript.json",

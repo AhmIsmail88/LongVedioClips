@@ -38,7 +38,8 @@ def _local_priority(
     ends_score = 1.0 if re.search(r"[.!?\u061f\u2026]\s*$", text) else 0.5
     words = len(text.split())
     density_score = min(1.0, (words / duration) / 2.5)
-    return dur_score * 0.5 + ends_score * 0.25 + density_score * 0.25
+    semantic_bonus = 0.2 if cand.source == "semantic" else 0.0
+    return dur_score * 0.5 + ends_score * 0.25 + density_score * 0.25 + semantic_bonus
 
 
 def _cap_candidates(

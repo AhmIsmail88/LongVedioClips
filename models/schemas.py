@@ -68,6 +68,9 @@ class CandidateSegment:
     end: float
     text: str
     segment_indices: list[int] = field(default_factory=list)
+    source: str = "window"
+    context_before: str = ""
+    context_after: str = ""
 
     @property
     def duration(self) -> float:
@@ -79,6 +82,9 @@ class CandidateSegment:
             "end": self.end,
             "text": self.text,
             "segment_indices": self.segment_indices,
+            "source": self.source,
+            "context_before": self.context_before,
+            "context_after": self.context_after,
         }
 
     @staticmethod
@@ -88,6 +94,9 @@ class CandidateSegment:
             end=d["end"],
             text=d["text"],
             segment_indices=d.get("segment_indices", []),
+            source=d.get("source", "window"),
+            context_before=d.get("context_before", ""),
+            context_after=d.get("context_after", ""),
         )
 
 

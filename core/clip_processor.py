@@ -20,6 +20,9 @@ chain (core/lighting.py) - one encode, and identical on both crop paths.
 from __future__ import annotations
 
 import os
+import hashlib
+import json
+from dataclasses import asdict
 
 from config import Config
 from core import lighting
@@ -39,16 +42,17 @@ def render_clips(
     if not clips:
         return []
 
+    os.environ["LVC_RENDER_THREADS"] = str(config.render_threads)
     clips_dir = config.clips_dir()
     os.makedirs(clips_dir, exist_ok=True)
 
     wants_overlay = config.burn_captions or config.add_title_overlay
-    if wants_overlay and not segments:
+    if config.burn_captions and not segments:
         logger.warn(
-            "Captions/title overlay requested but no transcript is available - "
-            "skipping the overlay for this run."
+            "Burned captions requested but no transcript is available - "
+            "skipping captions; title overlays can still render."
         )
-        wants_overlay = False
+        wants_overlay = bool(config.add_title_overlay)
 
     use_nvenc = False
     if config.use_smart_reframe:
@@ -73,16 +77,11 @@ def render_clips(
             f"{config.lighting_target_luma:.0f})."
         )
 
-    rendered: list[FinalClip] = []
     for clip in clips:
-        filename = f"clip_{clip.index:02d}.mp4"
-        output_path = str(clips_dir / filename)
-        render_target = str(clips_dir / f"_raw_{filename}") if wants_overlay else output_path
-
         # Final guarantee against mid-word cuts: whatever produced
         # these boundaries (analysis or a hand edit in the GUI), land
         # them on word edges using the transcript's word timestamps.
-        if segments:
+        if segments and not config.cover_full:
             from core.quality_filter import (
                 _pause_points,
                 _word_points,
@@ -96,9 +95,27 @@ def render_clips(
                 _moved = True
             if _moved:
                 logger.info(
-                    f"{filename}: boundaries adjusted to natural breaks "
+                    f"Clip {clip.index}: boundaries adjusted to natural breaks "
                     f"-> {clip.start:.1f}s-{clip.end:.1f}s"
                 )
+
+    if config.add_title_overlay:
+        from core.titles import ensure_safe_titles
+        ensure_safe_titles(clips, segments or [], config, logger)
+
+    from utils.resume import video_identity
+    identity = video_identity(video_path)
+    fingerprint = hashlib.sha256(json.dumps(
+        {"version": 4, "config": asdict(config), "source": identity,
+         "transcript": [s.to_dict() for s in (segments or [])]},
+        sort_keys=True, ensure_ascii=False, default=str,
+    ).encode("utf-8")).hexdigest()
+
+    rendered: list[FinalClip] = []
+    for clip in clips:
+        filename = f"clip_{clip.index:02d}.mp4"
+        output_path = str(clips_dir / filename)
+        render_target = str(clips_dir / f"_raw_{filename}") if wants_overlay else output_path
 
         # Resume: reuse a clip an earlier (interrupted) run already
         # finished - but only when its exact span matches, so edited
@@ -108,10 +125,12 @@ def render_clips(
             _already = os.path.exists(output_path) and os.path.getsize(output_path) > 0
         except OSError:
             _already = False
-        if _already:
+        if _already and config.resume:
             _meta = read_meta(output_path)
             if (
-                _meta.get("start") == round(clip.start, 3)
+                _meta.get("fingerprint") == fingerprint
+                and _meta.get("title") == clip.title
+                and _meta.get("start") == round(clip.start, 3)
                 and _meta.get("end") == round(clip.end, 3)
             ):
                 logger.info(f"Resume: {filename} already rendered - skipping.")
@@ -147,6 +166,10 @@ def render_clips(
                     normalize_audio=config.normalize_audio,
                     logger=logger,
                     extra_video_filter=extra_filter,
+                    layout=config.reframe_layout,
+                    podcast_top_share=config.podcast_top_share,
+                    focus_mode=config.podcast_focus,
+                    manual_crop=config.manual_crop,
                 )
             else:
                 render_vertical_clip(
@@ -162,18 +185,21 @@ def render_clips(
                     audio_codec=config.audio_codec,
                     normalize_audio=config.normalize_audio,
                     extra_video_filter=extra_filter,
+                    preserve_full_frame=config.preserve_full_frame,
                 )
 
             if light_plan.active:
                 lighting.verify_lighting(light_plan, render_target, logger, label=filename)
 
             if wants_overlay:
-                _burn_overlay(clip, render_target, output_path, segments, config, use_nvenc, logger)
+                _burn_overlay(clip, render_target, output_path, segments or [], config, use_nvenc, logger)
 
             clip.output_path = output_path
             rendered.append(clip)
             write_meta(
                 output_path,
+                fingerprint=fingerprint,
+                title=clip.title,
                 start=round(clip.start, 3),
                 end=round(clip.end, 3),
             )

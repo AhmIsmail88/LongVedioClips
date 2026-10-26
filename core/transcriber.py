@@ -127,7 +127,7 @@ def _load_whisper_model(
     run), we fall back to the normal path, which downloads it.
     """
     try:
-        from faster_whisper import WhisperModel
+        from faster_whisper import WhisperModel  # noqa: F401 - للتحقق من التثبيت فقط
     except ImportError as e:
         raise PipelineError(
             "faster-whisper is not installed.",
@@ -208,13 +208,14 @@ def transcribe(
     compute_type_gpu: str,
     compute_type_cpu: str,
     logger: Logger,
+    hotwords: str = "",
 ) -> list[TranscriptSegment]:
     """Transcribe a video's audio track into timestamped segments."""
 
     global _cuda_transcribe_broken
 
     try:
-        from faster_whisper import WhisperModel
+        from faster_whisper import WhisperModel  # noqa: F401 - للتحقق من التثبيت فقط
     except ImportError as e:
         raise PipelineError(
             "faster-whisper is not installed.",
@@ -248,9 +249,17 @@ def transcribe(
 
     logger.info(f"Whisper device={resolved_device}, compute_type={compute_type}")
 
-    model = _load_whisper_model(
-        model_size, resolved_device, compute_type, compute_type_cpu, logger
-    )
+    try:
+        model = _load_whisper_model(
+            model_size, resolved_device, compute_type, compute_type_cpu, logger)
+    except Exception as exc:
+        if resolved_device != "cuda":
+            raise
+        _cuda_transcribe_broken = True
+        resolved_device = "cpu"
+        logger.warn(f"CUDA model load failed ({exc}); using CPU.")
+        model = _load_whisper_model(
+            model_size, "cpu", compute_type_cpu, compute_type_cpu, logger)
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         wav_path = os.path.join(tmp_dir, "audio.wav")
@@ -264,12 +273,14 @@ def transcribe(
                 language=language,
                 vad_filter=True,
                 word_timestamps=True,
+                hotwords=hotwords or None,
             )
         except Exception as e:
             if resolved_device != "cuda":
                 raise PipelineError("Transcription failed.", hint=str(e)) from e
             _cuda_transcribe_broken = True
             logger.warn(f"CUDA transcription failed ({e}). Retrying on CPU.")
+            resolved_device = "cpu"
             model = _load_whisper_model(
                 model_size, "cpu", compute_type_cpu, compute_type_cpu, logger
             )
@@ -279,6 +290,7 @@ def transcribe(
                     language=language,
                     vad_filter=True,
                     word_timestamps=True,
+                    hotwords=hotwords or None,
                 )
             except Exception as e2:
                 raise PipelineError("Transcription failed.", hint=str(e2)) from e2
@@ -287,48 +299,68 @@ def transcribe(
             f"Detected language: {info.language} (p={info.language_probability:.2f})"
         )
 
+        from core.review_tools import check_language_confidence
+        check_language_confidence(language,info.language,info.language_probability)
+
         # Probed once, outside the loop, purely for progress reporting.
         total_seconds = _audio_seconds_for_progress(video_path)
         next_percent = _PROGRESS_PERCENT_STEP
         last_percent = 0.0
         segment_count = 0
 
-        segments: list[TranscriptSegment] = []
-        for seg in segments_iter:
-            text = seg.text.strip()
-            if text:
-                words = [
-                    Word(start=w.start, end=w.end, text=w.word.strip())
-                    for w in (seg.words or [])
-                    if w.word.strip()
-                ]
-                segments.append(
-                    TranscriptSegment(start=seg.start, end=seg.end, text=text, words=words)
-                )
+        for attempt in range(2):
+            try:
+                segments: list[TranscriptSegment] = []
+                for seg in segments_iter:
+                    text = seg.text.strip()
+                    if text:
+                        words = [
+                            Word(start=w.start, end=w.end, text=w.word.strip())
+                            for w in (seg.words or [])
+                            if w.word.strip()
+                        ]
+                        segments.append(
+                            TranscriptSegment(start=seg.start, end=seg.end, text=text, words=words)
+                        )
 
-            # Progress on the processed timeline (segment end vs audio
-            # duration), deliberately independent of whether this segment
-            # carried text, and never allowed to raise.
-            segment_count += 1
-            if total_seconds > 0:
-                end_seconds = _finite_seconds(seg.end)
-                percent = min(100.0, max(0.0, end_seconds / total_seconds * 100.0))
-                if percent >= next_percent:
-                    # The truncated percent (not a rounded one) keeps the
-                    # printed values strictly increasing.
-                    logger.info(
-                        f"Transcribing... {int(percent)}% "
-                        f"({int(end_seconds)}s of {int(total_seconds)}s of audio)"
-                    )
-                    last_percent = percent
-                    next_percent = (
-                        math.floor(percent / _PROGRESS_PERCENT_STEP) + 1
-                    ) * _PROGRESS_PERCENT_STEP
-            elif segment_count % _PROGRESS_SEGMENT_STEP == 0:
-                logger.info(
-                    f"Transcribing... {segment_count} segments processed "
-                    "(audio duration unknown)"
-                )
+                    # Progress on the processed timeline (segment end vs audio
+                    # duration), deliberately independent of whether this segment
+                    # carried text, and never allowed to raise.
+                    segment_count += 1
+                    if total_seconds > 0:
+                        end_seconds = _finite_seconds(seg.end)
+                        percent = min(100.0, max(0.0, end_seconds / total_seconds * 100.0))
+                        if percent >= next_percent:
+                            # The truncated percent (not a rounded one) keeps the
+                            # printed values strictly increasing.
+                            logger.info(
+                                f"Transcribing... {int(percent)}% "
+                                f"({int(end_seconds)}s of {int(total_seconds)}s of audio)"
+                            )
+                            last_percent = percent
+                            next_percent = (
+                                math.floor(percent / _PROGRESS_PERCENT_STEP) + 1
+                            ) * _PROGRESS_PERCENT_STEP
+                    elif segment_count % _PROGRESS_SEGMENT_STEP == 0:
+                        logger.info(
+                            f"Transcribing... {segment_count} segments processed "
+                            "(audio duration unknown)"
+                        )
+                break
+            except Exception as exc:
+                if resolved_device != "cuda" or attempt:
+                    raise PipelineError("Transcription failed.", hint=str(exc)) from exc
+                _cuda_transcribe_broken = True
+                resolved_device = "cpu"
+                logger.warn(f"CUDA failed while decoding ({exc}); restarting on CPU.")
+                model = _load_whisper_model(
+                    model_size, "cpu", compute_type_cpu, compute_type_cpu, logger)
+                segments_iter, info = model.transcribe(
+                    wav_path, language=language, vad_filter=True, word_timestamps=True,
+                    hotwords=hotwords or None)
+                next_percent = _PROGRESS_PERCENT_STEP
+                last_percent = 0.0
+                segment_count = 0
 
     if not segments:
         raise PipelineError(
@@ -346,7 +378,7 @@ def transcribe(
     else:
         logger.info(f"Transcribing... done ({segment_count} segments processed)")
 
-    return segments
+    return _sanitize_segments(segments)
 
 
 def save_transcript(segments: list[TranscriptSegment], path: str) -> None:
@@ -358,4 +390,14 @@ def save_transcript(segments: list[TranscriptSegment], path: str) -> None:
 def load_transcript(path: str) -> list[TranscriptSegment]:
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return [TranscriptSegment.from_dict(d) for d in data]
+    return _sanitize_segments([TranscriptSegment.from_dict(d) for d in data])
+
+
+def _sanitize_segments(segments):
+    from utils.sanitize import load_blocklist, mask_text
+    blocked = load_blocklist()
+    for segment in segments:
+        segment.text = mask_text(segment.text, blocked)
+        for word in segment.words:
+            word.text = mask_text(word.text, blocked)
+    return segments

@@ -224,6 +224,8 @@ def trim_clip(video_path: str, output_path: str, start: float, end: float) -> No
         "aac",
         output_path,
     ]
+    if os.environ.get("LVC_RENDER_THREADS", "0") != "0":
+        cmd[-1:-1] = ["-threads", os.environ["LVC_RENDER_THREADS"], "-filter_threads", "1"]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise PipelineError(
@@ -274,6 +276,8 @@ def burn_subtitles(
         output_path,
     ]
 
+    if os.environ.get("LVC_RENDER_THREADS", "0") != "0":
+        cmd[-1:-1] = ["-threads", os.environ["LVC_RENDER_THREADS"], "-filter_threads", "1"]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         if use_nvenc:
@@ -305,6 +309,7 @@ def render_vertical_clip(
     audio_codec: str,
     normalize_audio: bool = False,
     extra_video_filter: str | None = None,
+    preserve_full_frame: bool = False,
 ) -> None:
     """Cut [start, end] from video_path and export as a center-cropped
     vertical clip at `width`x`height`.
@@ -323,6 +328,11 @@ def render_vertical_clip(
         f":'if(gt(ih*{width}/{height},iw),iw*{height}/{width},ih)',"
         f"scale={width}:{height}"
     )
+    if preserve_full_frame:
+        crop_and_scale = (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"
+        )
     vf = combine_filters(crop_and_scale, extra_video_filter)
 
     cmd = [
@@ -351,6 +361,8 @@ def render_vertical_clip(
         # Insert as output options right before the output path.
         cmd[cmd.index(output_path):cmd.index(output_path)] = ["-af", LOUDNORM_FILTER]
 
+    if os.environ.get("LVC_RENDER_THREADS", "0") != "0":
+        cmd[-1:-1] = ["-threads", os.environ["LVC_RENDER_THREADS"], "-filter_threads", "1"]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         if use_nvenc:

@@ -230,6 +230,67 @@ def _greedy_keep(
     return kept, dropped_time, dropped_text
 
 
+def plan_complete_parts(video_duration, part_length, segments=()):
+    """Partition the entire source; each shared boundary is computed once."""
+    import math
+
+    if not math.isfinite(video_duration) or video_duration <= 0:
+        raise ValueError("Source duration must be finite and positive")
+    if not math.isfinite(part_length) or part_length < 3:
+        raise ValueError("Part length must be at least three seconds")
+    pauses = _pause_points(segments)
+    words = _word_points(segments)
+    boundaries = [0.0]
+    count = max(1, math.ceil(video_duration / part_length))
+    count = min(count, max(1, int(video_duration // 3)))
+    step = video_duration / count
+    for i in range(1, count):
+        target = step * i
+        latest = video_duration - 3 * (count - i)
+        nearby = [(moment, gap) for moment, gap in pauses
+                  if abs(moment - target) <= 2.5
+                  and boundaries[-1] + 3 <= moment <= latest]
+        boundary = max(boundaries[-1] + 3, min(latest, target))
+        if nearby:
+            boundary = max(nearby, key=lambda p: (p[1], -abs(p[0] - target)))[0]
+        else:
+            for start, end in words:
+                if start < boundary < end:
+                    options = [t for t in (start, end)
+                               if boundaries[-1] + 3 <= t <= latest]
+                    if options:
+                        boundary = min(options, key=lambda t: abs(t - target))
+                    break
+        if boundary > boundaries[-1]:
+            boundaries.append(boundary)
+    boundaries.append(video_duration)
+    return [FinalClip(index=i + 1, start=start, end=end, score=0.0,
+                      reason="Complete source coverage", title="",
+                      text=" ".join(s.text for s in segments
+                                    if s.end > start and s.start < end))
+            for i, (start, end) in enumerate(zip(boundaries, boundaries[1:], strict=False))]
+
+
+def timeline_coverage(clips, duration):
+    """Measure the union of intervals, reporting all uncovered spans."""
+    if duration <= 0:
+        return {"covered_seconds": 0.0, "coverage_ratio": 0.0, "gaps": []}
+    frontier = covered = 0.0
+    gaps = []
+    for clip in sorted(clips, key=lambda c: c.start):
+        start, end = max(0.0, clip.start), min(duration, clip.end)
+        if end <= start:
+            continue
+        if start > frontier:
+            gaps.append((frontier, start))
+        covered += max(0.0, end - max(frontier, start))
+        frontier = max(frontier, end)
+    if frontier < duration:
+        gaps.append((frontier, duration))
+    return {"covered_seconds": covered, "coverage_ratio": covered / duration,
+            "gaps": gaps}
+
+
 def _cover_timeline(
     clips: list[ScoredClip],
     video_duration: float,
@@ -293,7 +354,7 @@ def _cover_timeline(
         next_position = min(best.end, video_duration)
         position = next_position if next_position > position else position + 1.0
     stats["cover_parts"] = len(kept)
-    stats["cover_span"] = sum(c.duration for c in kept) / max(video_duration, 1e-6)
+    stats["cover_span"] = timeline_coverage(kept, video_duration)["coverage_ratio"]
     return kept
 
 
@@ -413,7 +474,7 @@ def remove_overlaps(
         and max_clip_duration
     ):
         trimmed = [_trim_to_max(c, max_clip_duration) for c in clips]
-        n_trimmed = sum(1 for a, b in zip(clips, trimmed) if a is not b)
+        n_trimmed = sum(1 for a, b in zip(clips, trimmed, strict=True) if a is not b)
         retry, _, _ = _greedy_keep(trimmed, max_overlap_ratio, max_text_similarity)
         _fill_chronologically(
             trimmed, retry, max_overlap_ratio, target_count, max_text_similarity
@@ -852,6 +913,13 @@ def select_final_clips(
     stats["min_score_threshold"] = config.min_score_threshold
     stats["candidates_scored"] = len(scored_clips)
 
+    if config.cover_full:
+        parts = plan_complete_parts(video_duration, config.part_length, segments)
+        stats.update(timeline_coverage(parts, video_duration))
+        stats["final"] = len(parts)
+        stats["cover_span"] = stats["coverage_ratio"]
+        return parts
+
     filtered = reject_low_quality(
         scored_clips, config, video_duration, logger, counts=stats
     )
@@ -902,29 +970,6 @@ def select_final_clips(
     stats["boundary_snapped"] = snapped
     stats["boundary_word_snapped"] = word_snapped
     stats["boundary_pause_snapped"] = pause_snapped
-
-    if getattr(config, "cover_full", False):
-        top = _cover_timeline(filtered, video_duration, config.max_duration, stats)
-        stats["final"] = len(top)
-        span = sum(c.duration for c in top)
-        logger.info(
-            f"Cover mode: {len(top)} consecutive part(s), "
-            f"{span:.0f}s of {video_duration:.0f}s covered "
-            f"({100 * span / max(video_duration, 1e-6):.0f}%)."
-        )
-        top.sort(key=lambda c: c.start)
-        return [
-            FinalClip(
-                index=i + 1,
-                start=c.start,
-                end=c.end,
-                score=c.score,
-                reason=c.reason,
-                text=c.text,
-                title=c.title,
-            )
-            for i, c in enumerate(top)
-        ]
 
     deduped = remove_overlaps(
         filtered,

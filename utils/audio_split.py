@@ -147,6 +147,36 @@ def plan_parts(
     return parts
 
 
+def snap_parts_to_speech(parts, segments, max_snap=2.5):
+    """Move shared cut points once while retaining every source moment."""
+    if not parts or not segments:
+        return parts
+    from core.quality_filter import _pause_points, _word_points
+    pauses = _pause_points(segments)
+    words = _word_points(segments)
+    total = parts[-1][1]
+    boundaries = [parts[0][0]]
+    for i, (_, target) in enumerate(parts[:-1], 1):
+        earliest = boundaries[-1] + MIN_PART_SECONDS
+        latest = total - MIN_PART_SECONDS * (len(parts) - i)
+        nearby = [(point, gap) for point, gap in pauses
+                  if abs(point - target) <= max_snap and earliest <= point <= latest]
+        boundary = max(earliest, min(latest, target))
+        if nearby:
+            boundary = max(nearby, key=lambda p: (p[1], -abs(p[0]-target)))[0]
+        else:
+            for start, end in words:
+                if start < boundary < end:
+                    choices = [t for t in (start, end) if earliest <= t <= latest
+                               and abs(t-target) <= max_snap]
+                    if choices:
+                        boundary = min(choices, key=lambda t: abs(t-target))
+                    break
+        boundaries.append(boundary)
+    boundaries.append(total)
+    return list(zip(boundaries, boundaries[1:], strict=False))
+
+
 def split_audio(
     source_path: str | Path,
     output_dir: str | Path,
@@ -155,6 +185,7 @@ def split_audio(
     part_seconds: float | None = None,
     out_format: str | None = None,
     logger=None,
+    segments=None,
 ) -> list[Path]:
     """Cut the audio of ``source_path`` into the planned parts.
 
@@ -173,6 +204,10 @@ def split_audio(
     except ValueError as e:
         raise PipelineError(str(e)) from e
 
+    if segments:
+        parts = snap_parts_to_speech(parts, segments)
+        if logger is not None:
+            logger.info("Audio boundaries moved to speech breaks; complete coverage retained.")
     source = Path(source_path)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

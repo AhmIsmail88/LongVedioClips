@@ -2,8 +2,10 @@
 import hashlib,json
 from pathlib import Path
 from core.export_queue import read,save
-INDEX=Path(__file__).resolve().parents[1]/"projects"/"index.json"
-HIDDEN=Path(__file__).resolve().parents[1]/"projects"/"hidden.json"
+from core.app_paths import DATA_ROOT
+
+INDEX=DATA_ROOT/"projects"/"index.json"
+HIDDEN=DATA_ROOT/"projects"/"hidden.json"
 
 def register(snapshot):
     analysis=read(snapshot)

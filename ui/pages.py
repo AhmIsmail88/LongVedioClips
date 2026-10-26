@@ -14,6 +14,7 @@ from pathlib import Path
 from core.ui_theme import (  # noqa: F401 - تُستخدم عبر الفئات أدناه
     AR_STRINGS,
     QSS,
+    DATA_ROOT,
     REPO_ROOT,
     STAGE_LABELS,
     STAGE_TEXT_RE,
@@ -1002,22 +1003,26 @@ if QT_IMPORT_ERROR is None:
             start=self.table.cellWidget(row,2);end=self.table.cellWidget(row,3)
             if start is None or end is None:return True
             duration=float(self.snapshot.get('duration') or 0)
-            return 0<=start.value()<end.value()<=duration+1e-6
+            from core.desktop_pipeline import span_ok
+            return span_ok(start.value(),end.value(),duration)
 
         def validate_times(self,*unused):
             if not self.snapshot:
                 return
-            invalid=0
+            invalid=0;blocking=0
             for row in range(self.table.rowCount()):
                 bad=not self._row_valid(row)
-                if bad:invalid+=1
+                if bad:
+                    invalid+=1
+                    picked=self.table.cellWidget(row,0)
+                    if picked is not None and picked.isChecked():blocking+=1
                 for column in (2,3):
                     control=self.table.cellWidget(row,column)
                     if control is None or control.property('invalid') is bad:continue
                     control.setProperty('invalid',bad)
                     control.style().unpolish(control);control.style().polish(control)
             self.invalid_label.setText((tr('توقيت غير صالح')+f': {invalid}') if invalid else '')
-            enabled=bool(self.table.rowCount()) and invalid==0
+            enabled=bool(self.table.rowCount()) and blocking==0
             if self.export_button.isEnabled()!=enabled:self.export_button.setEnabled(enabled)
 
         def reject_all(self):
@@ -1190,7 +1195,7 @@ if QT_IMPORT_ERROR is None:
             head.addWidget(self.search)
             head.addStretch(1)
             folder_btn = QPushButton(STRINGS["open_folder"])
-            folder_btn.clicked.connect(lambda: open_folder(REPO_ROOT / "projects" / "desktop"))
+            folder_btn.clicked.connect(lambda: open_folder(DATA_ROOT / "projects" / "desktop"))
             head.addWidget(folder_btn)
             refresh = QPushButton(STRINGS["refresh"])
             refresh.clicked.connect(self.refresh)
@@ -1223,7 +1228,7 @@ if QT_IMPORT_ERROR is None:
                     name=Path(item.get("name") or snapshot.parent.name).name,
                     clips=int(item.get("clips") or 0),
                     source=item.get("source", ""), first_start=0.0)
-            desktop = REPO_ROOT / "projects" / "desktop"
+            desktop = DATA_ROOT / "projects" / "desktop"
             if desktop.exists():
                 for snapshot in desktop.glob("*/analysis.json"):
                     key = str(snapshot.resolve())
@@ -1552,7 +1557,7 @@ if QT_IMPORT_ERROR is None:
 
         # -- preferences -----------------------------------------------------
         def preferences_path(self):
-            return REPO_ROOT / "projects" / "watch.json"
+            return DATA_ROOT / "projects" / "watch.json"
 
         def load_preferences(self) -> None:
             from core.export_queue import read
@@ -2194,7 +2199,7 @@ if QT_IMPORT_ERROR is None:
             self.go_to("imp")
             self.ui_language.currentIndexChanged.connect(self.change_language)
             from core.export_queue import read
-            preferred=read(REPO_ROOT/'projects'/'interface.json').get('language','ar')
+            preferred=read(DATA_ROOT/'projects'/'interface.json').get('language','ar')
             self.ui_language.setCurrentIndex(1 if preferred=='en' else 0)
             self.change_language()
 
@@ -2244,7 +2249,7 @@ if QT_IMPORT_ERROR is None:
             self.import_page.update_plan()
             self.analyze_page.set_progress(self.analyze_page.progress.value())
             from core.export_queue import save
-            if '--smoke' not in sys.argv:save(REPO_ROOT/'projects'/'interface.json',{'language':language})
+            if '--smoke' not in sys.argv:save(DATA_ROOT/'projects'/'interface.json',{'language':language})
             self.tools_page.set_language(language)
             self.review_page.editor.set_language(language)
             for i,label in enumerate(['المقاطع','الكابشن','الكادر']):self.review_page.tabs.setTabText(i,translate(label,language))
@@ -2281,7 +2286,7 @@ if QT_IMPORT_ERROR is None:
 
         def accept_stream(self,url):
             from core.media_download import launch
-            destination = REPO_ROOT / "downloads"
+            destination = DATA_ROOT / "downloads"
             try:
                 folder = launch(url, destination, 720, "", "inspect")
             except Exception as exc:

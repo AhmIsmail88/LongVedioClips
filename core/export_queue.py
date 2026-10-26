@@ -68,10 +68,14 @@ def run(folder):
             cfg.output_dir=str(Path(cfg.output_dir)/"previews")
         if (cfg.burn_captions or cfg.add_title_overlay) and not segments:
             state["phase"]="transcribing"
-            from core.transcriber import transcribe
-            segments=transcribe(video_path=cfg.video_path,model_size=cfg.whisper_model,
-                language=cfg.language,device=cfg.device,compute_type_gpu=cfg.compute_type_gpu,
-                compute_type_cpu=cfg.compute_type_cpu,logger=Logger())
+            try:
+                from core.transcriber import transcribe
+                segments=transcribe(video_path=cfg.video_path,model_size=cfg.whisper_model,
+                    language=cfg.language,device=cfg.device,compute_type_gpu=cfg.compute_type_gpu,
+                    compute_type_cpu=cfg.compute_type_cpu,logger=Logger())
+            except Exception as exc:  # الكابشن رفاهية: لا يوقف التصدير كله
+                state["warning"]=f"الكابشن غير متاح ({exc}) — تصدير بدون كابشن"
+                segments=[]
         for data in request["clips"]:
             if (folder/"stop").exists():
                 state["state"]="paused";break

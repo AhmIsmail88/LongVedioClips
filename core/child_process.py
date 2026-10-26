@@ -31,16 +31,42 @@ def child_env(base: dict | None = None) -> dict:
     return {**(base if base is not None else os.environ), **CHILD_ENV}
 
 
+def _repair_fd(fd: int, flags: int) -> None:
+    """A windowed build can start with invalid 0/1/2 handles; point them at
+    devnull so child processes inherit handles CreateProcess accepts."""
+    try:
+        os.fstat(fd)
+        return
+    except OSError:
+        pass
+    try:
+        null = os.open(os.devnull, flags)
+    except OSError:
+        return
+    try:
+        os.dup2(null, fd)
+    finally:
+        os.close(null)
+
+
 def ensure_stdio() -> None:
-    """In a windowed build sys.stdout/stderr are None; rebind to the inherited
-    handles (or devnull) so logging and progress prints never crash."""
-    for name, fd in (("stdout", 1), ("stderr", 2)):
+    """In a windowed build sys.stdout/stderr are None and fd 0/1/2 may be
+    invalid; rebind them so logging, prints and ffmpeg subprocesses work."""
+    _repair_fd(0, os.O_RDWR)
+    _repair_fd(1, os.O_WRONLY)
+    _repair_fd(2, os.O_WRONLY)
+    for name, mode in (("stdin", "r"), ("stdout", "w"), ("stderr", "w")):
         if getattr(sys, name) is not None:
             continue
+        fd = {"stdin": 0, "stdout": 1, "stderr": 2}[name]
         try:
-            stream = os.fdopen(fd, "w", encoding="utf-8", errors="replace", buffering=1)
+            stream = os.fdopen(fd, mode, encoding="utf-8", errors="replace",
+                               buffering=1 if mode == "w" else -1)
+            if mode == "w":
+                stream.write("")
+                stream.flush()
         except OSError:
-            stream = open(os.devnull, "w", encoding="utf-8")
+            stream = open(os.devnull, mode, encoding="utf-8", errors="replace")
         _STDIO.append(stream)
         setattr(sys, name, stream)
 

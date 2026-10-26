@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt,QTimer
 from PySide6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QLabel,QLineEdit,QPushButton,
     QComboBox,QCheckBox,QSpinBox,QDoubleSpinBox,QTabWidget,QProgressBar,QListWidget,QListWidgetItem,
     QFileDialog,QMessageBox,QPlainTextEdit)
+from core.app_paths import DATA_ROOT as _DATA_ROOT
 from core.export_queue import read
 from core.desktop_language import translate
 from core.media_download import (COOKIES_HINT, PLATFORM_NAMES, URL_HINT, platform_of,
@@ -12,7 +13,7 @@ from core.media_download import (COOKIES_HINT, PLATFORM_NAMES, URL_HINT, platfor
 
 class NativeTools(QWidget):
     def __init__(self,on_source=None,busy=None,parent=None):
-        super().__init__(parent);self.on_source=on_source;self.busy=busy or (lambda:False);self.language='ar';self.jobs={k:Path(v) for k,v in read(Path(__file__).resolve().parents[1]/'projects'/'native_tools.json').items()};self.active=None
+        super().__init__(parent);self.on_source=on_source;self.busy=busy or (lambda:False);self.language='ar';self.jobs={k:Path(v) for k,v in read(_DATA_ROOT/'projects'/'native_tools.json').items()};self.active=None
         root=QVBoxLayout(self);root.setContentsMargins(24,18,24,18);root.setSpacing(14)
         self.tabs=QTabWidget();root.addWidget(self.tabs)
         self.controls={};self.tab_labels=['تحميل الروابط','استخراج الصوت','استخراج النص','تقسيم الصوت']
@@ -24,7 +25,7 @@ class NativeTools(QWidget):
             source_row=QHBoxLayout();source_row.addWidget(source,1)
             if operation!='download':source_row.addWidget(pick)
             form.addRow(QLabel('رابط فيديو واحد' if operation=='download' else 'ملف الفيديو أو الصوت'),source_row)
-            directory=QLineEdit(str(Path(__file__).resolve().parents[1]/('downloads' if operation=='download' else 'media_exports')))
+            directory=QLineEdit(str(_DATA_ROOT/('downloads' if operation=='download' else 'media_exports')))
             directory.setLayoutDirection(Qt.LeftToRight);choose=QPushButton('مكان الحفظ');choose.clicked.connect(lambda unused=False,op=operation:self.pick_directory(op))
             directory_row=QHBoxLayout();directory_row.addWidget(directory,1);directory_row.addWidget(choose);form.addRow(QLabel('مجلد الحفظ'),directory_row)
             values=dict(source=source,directory=directory,page=page)
@@ -95,7 +96,7 @@ class NativeTools(QWidget):
 
     def persist_jobs(self):
         from core.export_queue import save
-        save(Path(__file__).resolve().parents[1]/'projects'/'native_tools.json',{k:str(v) for k,v in self.jobs.items()})
+        save(_DATA_ROOT/'projects'/'native_tools.json',{k:str(v) for k,v in self.jobs.items()})
 
     def tr(self,text):return translate(text,self.language)
 

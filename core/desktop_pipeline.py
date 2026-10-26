@@ -6,8 +6,45 @@ from config import Config,PLATFORM_PRESETS
 from core.export_queue import read,save
 from utils.resume import video_identity
 
+TIME_EPSILON = 0.05  # منزلتان عشريتان في الواجهة: التقريب قد يتجاوز المدة بـ 0.005 ثانية
+
+
+def span_ok(start, end, duration, eps=TIME_EPSILON) -> bool:
+    """توقيت صالح مع سماحية تقريب العرض."""
+    return 0 <= start < end <= duration + eps
+
+
+def clamped_span(start, end, duration):
+    """توقيت مقطوع داخل حدود الفيديو."""
+    return (max(0.0, min(float(start), float(duration))),
+            max(0.0, min(float(end), float(duration))))
+
+
+def clips_from_rows(snapshot, rows):
+    """يبني المقاطع المختارة من صفوف المراجعة، ويقطع النهايات على مدة الفيديو."""
+    from models.schemas import FinalClip
+    duration = float(snapshot['duration'])
+    known = {c['index']: c for c in snapshot['final_clips']}
+    clips, titles, focus = [], {}, {}
+    for row in rows:
+        if not row.get('selected'):
+            continue
+        index = int(row['index'])
+        start = float(row['start'])
+        end = float(row['end'])
+        if index not in known or not span_ok(start, end, duration):
+            raise ValueError('راجع توقيت المقطع ' + str(index))
+        start, end = clamped_span(start, end, duration)
+        clips.append(FinalClip.from_dict({**known[index], 'start': start, 'end': end}))
+        titles[str(index)] = row.get('title', '')
+        focus[str(index)] = row.get('focus', 'largest')
+    if not clips:
+        raise ValueError('اختار مقطعًا واحدًا على الأقل')
+    return clips, titles, focus
+
 def project_folder(source,root=None):
-    root=Path(root or Path(__file__).resolve().parents[1]/'projects'/'desktop')
+    from core.app_paths import DATA_ROOT
+    root=Path(root or DATA_ROOT/'projects'/'desktop')
     identity=video_identity(source)
     digest=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest()[:16]
     return root/digest
@@ -87,20 +124,12 @@ def retry_failed(folder,preview=False,light=True):
 
 def export_review(folder,rows,preview=False,light=True,top_three=False):
     from core.export_queue import launch
-    from models.schemas import FinalClip
     folder=Path(folder);snapshot=read(folder/'analysis.json')
     if not snapshot:raise ValueError('حلّل الفيديو أولًا')
     if video_identity(snapshot['video_path'])!=snapshot['source_identity']:
         raise ValueError('تغير ملف المصدر؛ أعد التحليل قبل التصدير')
-    cfg=Config(**snapshot['config']);duration=float(snapshot['duration']);clips=[];titles={};focus={}
-    known={c['index']:c for c in snapshot['final_clips']}
-    for row in rows:
-        if not row.get('selected'):continue
-        index=int(row['index']);start=float(row['start']);end=float(row['end'])
-        if index not in known or not 0<=start<end<=duration:raise ValueError('راجع توقيت المقطع '+str(index))
-        data={**known[index],'start':start,'end':end};clips.append(FinalClip.from_dict(data))
-        titles[str(index)]=row.get('title','');focus[str(index)]=row.get('focus','largest')
-    if not clips:raise ValueError('اختار مقطعًا واحدًا على الأقل')
+    cfg=Config(**snapshot['config'])
+    clips,titles,focus=clips_from_rows(snapshot,rows)
     if top_three:clips=sorted(clips,key=lambda c:(-c.score,c.index))[:3]
     segments,crops=_edits_for(snapshot,cfg,folder)
     save(folder/'desktop_review.json',rows)

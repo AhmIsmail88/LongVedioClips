@@ -12,7 +12,7 @@ import sys
 import re
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+from core.app_paths import DATA_ROOT, REPO_ROOT  # noqa: E402 - مسارات مشتركة
 
 
 def resource_path(*parts) -> Path:
@@ -295,7 +295,7 @@ def build_pipeline_command(video: str, settings: dict) -> list[str]:
     """يبني أمر تشغيل خط الأنابيب من إعدادات الواجهة."""
     from core.desktop_pipeline import project_folder
     root=settings.get('projects_root') or None
-    folder=project_folder(video,root) if Path(video).is_file() else REPO_ROOT/'projects'/'desktop'/'example'
+    folder=project_folder(video,root) if Path(video).is_file() else DATA_ROOT/'projects'/'desktop'/'example'
     from core.child_process import python_command
     return python_command('core.desktop_pipeline', video,
                           json.dumps(settings, ensure_ascii=False), folder)

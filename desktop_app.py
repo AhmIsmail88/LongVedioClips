@@ -43,6 +43,10 @@ def main() -> int:
     from core.child_process import ensure_stdio
 
     ensure_stdio()
+    if "--diagnose" in sys.argv:
+        from core.diagnose import main as diagnose
+
+        return diagnose()
     try:
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QFont, QIcon

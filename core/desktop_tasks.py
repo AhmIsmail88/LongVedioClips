@@ -20,7 +20,8 @@ def launch(operation,request):
     if not source.is_file():raise ValueError('ملف المصدر غير موجود')
     identity=video_identity(source);request={**request,'source':str(source),'operation':operation,'source_identity':identity}
     key=hashlib.sha256(json.dumps(request,sort_keys=True).encode()).hexdigest()[:20]
-    root=Path(__file__).resolve().parents[1]
+    from core.app_paths import DATA_ROOT
+    root=DATA_ROOT
     folder=root/'projects'/'tasks'/key;folder.mkdir(parents=True,exist_ok=True)
     status=read(folder/'status.json')
     if status.get('state')=='running' and time.time()-status.get('heartbeat',0)<30:raise ValueError('المهمة تعمل بالفعل')

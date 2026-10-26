@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import pathlib
 
-ROOT = pathlib.Path(__file__).resolve().parents[1] / "projects"
+from core.app_paths import DATA_ROOT as _DATA_ROOT
+
+ROOT = _DATA_ROOT / "projects"
 FILE = ROOT / "presets.json"
 
 # Only these keys are stored: transient UI state never leaks into a preset.

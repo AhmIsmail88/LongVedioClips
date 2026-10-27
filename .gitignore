@@ -35,3 +35,4 @@ media_exports/
 .pytest_cache/
 .openclaw_*
 *.tmp
+dist_new/

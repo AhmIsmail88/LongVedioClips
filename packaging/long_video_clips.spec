@@ -32,6 +32,9 @@ datas += collect_data_files("static_ffmpeg")
 # faster-whisper ships the Silero VAD model under faster_whisper/assets; without it
 # transcription aborts ("Load model ... silero_vad_v6.onnx failed").
 datas += collect_data_files("faster_whisper")
+# OpenCV ships its face/smile cascades as data files; smart reframe loads
+# cv2.data.haarcascades + "haarcascade_frontalface_default.xml".
+datas += collect_data_files("cv2")
 # nudenet ships its 320n.onnx next to the module; without it screening cannot run.
 datas += collect_data_files("nudenet")
 

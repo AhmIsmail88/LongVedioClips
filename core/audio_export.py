@@ -1,6 +1,6 @@
 """Standalone background audio extraction without speech/LLM models."""
 import hashlib,json,os,subprocess,sys,time
-from core.child_process import python_command
+from core.child_process import child_env, python_command
 from pathlib import Path
 from core.export_queue import save,read
 from utils.ffmpeg import get_ffmpeg_binaries,probe_duration
@@ -41,7 +41,8 @@ def launch(source,directory,start,end,fmt,bitrate):
     try:
         with (folder/"worker.log").open("a",encoding="utf-8") as log:
             subprocess.Popen(python_command("core.audio_export", folder),
-                cwd=str(Path(__file__).resolve().parents[1]),stdout=log,stderr=log,creationflags=flags)
+                cwd=str(Path(__file__).resolve().parents[1]),stdout=log,stderr=log,creationflags=flags,
+                env=child_env())
     except Exception:
         save(folder/"status.json",{"state":"failed","error":"تعذر تشغيل استخراج الصوت"});raise
     return folder

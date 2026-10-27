@@ -1,6 +1,6 @@
 """Single-video downloads in a separate resumable local process."""
 import hashlib,os,shutil,subprocess,sys,threading,time
-from core.child_process import python_command
+from core.child_process import child_env, python_command
 from pathlib import Path
 from urllib.parse import urlsplit,urlunsplit
 from core.export_queue import read,save
@@ -142,7 +142,8 @@ def launch(url,directory,height=720,cookies="",mode="inspect",media_kind="video"
     try:
         with (folder/"worker.log").open("a",encoding="utf-8") as log:
             subprocess.Popen(python_command("core.media_download", folder),
-                cwd=str(Path(__file__).resolve().parents[1]),stdout=log,stderr=log,creationflags=flags)
+                cwd=str(Path(__file__).resolve().parents[1]),stdout=log,stderr=log,creationflags=flags,
+                env=child_env())
     except Exception:
         save(folder/"status.json",{"state":"failed","error":"تعذر تشغيل عامل التحميل"});raise
     return folder

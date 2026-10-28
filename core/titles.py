@@ -49,6 +49,12 @@ def ensure_safe_titles(clips,segments,config,logger):
             clip.title=saved
         elif source.strip():
             pending.append((clip,source,key))
+    if pending:
+        ready, why = clip_selector.ollama_ready(config.ollama_host, config.ollama_model)
+        if not ready:
+            logger.warn(f'Ollama غير متاح ({why}) — تم تخطي توليد العناوين. '
+                        'شغّل Ollama أو أطفئ خيار العناوين لتسريع التحليل.')
+            return
     # Bounded requests allow a large coverage run to checkpoint titles.
     for offset in range(0,len(pending),4):
         batch=pending[offset:offset+4]

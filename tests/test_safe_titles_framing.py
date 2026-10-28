@@ -54,10 +54,33 @@ class SafeTitlesFramingTests(unittest.TestCase):
                 clip=SimpleNamespace(start=0,end=5,text="نص عن الأسرة والتربية",title="Clip 01")
                 replies=[json.dumps({"titles":[{"i":0,"title":"كيف تبني بيتا سعيدا"}]}),
                          json.dumps({"checks":[{"i":0,"safe":decision}]})]
-                with patch("core.clip_selector._call_ollama",side_effect=replies):
+                with patch("core.clip_selector._call_ollama",side_effect=replies), \
+                     patch("core.clip_selector.ollama_ready",return_value=(True,"")):
                     ensure_safe_titles([clip],[],cfg,logger)
                 self.assertEqual(bool(clip.title),decision is True)
             clip=SimpleNamespace(start=0,end=5,text="نص عن الأسرة",title="Part 1")
-            with patch("core.clip_selector._call_ollama",side_effect=RuntimeError("offline")):
+            with patch("core.clip_selector._call_ollama",side_effect=RuntimeError("offline")), \
+                 patch("core.clip_selector.ollama_ready",return_value=(True,"")):
                 ensure_safe_titles([clip],[],cfg,logger)
             self.assertEqual(clip.title,"")
+
+    def test_titles_skipped_when_ollama_down(self):
+        """خادم غير متاح: محاولة فحص واحدة فقط، وبلا أي نداء توليد."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from tempfile import TemporaryDirectory
+        from core.titles import ensure_safe_titles
+
+        warns=[]
+        with TemporaryDirectory() as temp:
+            cfg=SimpleNamespace(add_title_overlay=True,resume=False,ollama_host="http://127.0.0.1:9",
+                ollama_model="test",llm_timeout_seconds=1,llm_num_ctx=2048,
+                project_output_dir=lambda: __import__("pathlib").Path(temp))
+            logger=SimpleNamespace(info=lambda text:None,warn=warns.append)
+            clip=SimpleNamespace(start=0,end=5,text="نص عن الأسرة والتربية",title="Clip 01")
+            with patch("core.clip_selector._call_ollama") as call, \
+                 patch("core.clip_selector.ollama_ready",return_value=(False,"unreachable")):
+                ensure_safe_titles([clip],[],cfg,logger)
+        self.assertEqual(call.call_count,0)
+        self.assertEqual(clip.title,"")
+        self.assertEqual(len(warns),1)

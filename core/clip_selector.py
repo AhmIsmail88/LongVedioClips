@@ -161,6 +161,41 @@ def _extract_json(raw_text: str) -> dict:
     raise ValueError("No JSON object found in LLM response.")
 
 
+def ollama_ready(host: str, model: str, timeout: float = 2.0) -> tuple[bool, str]:
+    """فحص سريع قبل أي دفعات: هل Ollama متاح وهل الموديل موجود؟
+
+    دفعة فاشلة واحدة سريعة أفضل من عشرات المحاولات المتتابعة التي تُجمّد
+    شريط التقدم لِدقائق بينما لا يوجد خادم أصلًا.
+    """
+    import urllib.error
+    import urllib.request
+
+    base = str(host or "").rstrip("/")
+    if not base:
+        return False, "no host"
+    try:
+        with urllib.request.urlopen(f"{base}/api/tags", timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return False, "unreachable"
+    names = set()
+    for item in data.get("models") or []:
+        if isinstance(item, dict):
+            for key in ("name", "model"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    names.add(value)
+    wanted = str(model or "")
+    if not names:
+        return False, "no models"
+    if wanted in names:
+        return True, ""
+    stem = wanted.split(":")[0]
+    if any(name.split(":")[0] == stem for name in names):
+        return True, ""
+    return False, f"model {wanted} not pulled"
+
+
 def _call_ollama(
     host: str,
     model: str,

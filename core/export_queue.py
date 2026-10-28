@@ -39,6 +39,9 @@ def launch(folder,clips,config,segments,options):
     save(folder/"status.json",{"state":"running","heartbeat":time.time(),"completed":[],"total":len(clips)})
     flags=subprocess.CREATE_NO_WINDOW if os.name=="nt" else 0
     with (folder/"worker.log").open("a",encoding="utf-8") as log:
+        # A shared log across runs made old failures look current; mark each start.
+        log.write(f"\n=== export {time.strftime('%Y-%m-%d %H:%M:%S')} · {len(clips)} clip(s) ===\n")
+        log.flush()
         subprocess.Popen(python_command("core.export_queue", folder),
             cwd=str(Path(__file__).resolve().parents[1]),stdout=log,stderr=log,creationflags=flags,
             env=child_env())
